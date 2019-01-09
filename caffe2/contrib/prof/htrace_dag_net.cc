@@ -1,7 +1,7 @@
 #include <htrace.hpp>
 
 #include "caffe2/contrib/prof/htrace_conf.h"
-#include "caffe2/core/net_dag.h"
+#include "caffe2/core/net.h"
 #include "caffe2/core/operator.h"
 
 namespace caffe2 {
@@ -22,8 +22,12 @@ class HTraceDAGNet : public DAGNetBase {
     }
   }
 
-  bool SupportsAsync() override {
-    return false;
+  bool Run() override {
+    htrace::Scope run_scope(
+        htrace_tracer_,
+        htrace_root_scope_.GetSpanId(),
+        "run-scope-" + caffe2::to_string(run_count_++));
+    return DAGNetBase::Run();
   }
 
   ~HTraceDAGNet() {
@@ -39,15 +43,7 @@ class HTraceDAGNet : public DAGNetBase {
   }
 
  protected:
-  bool DoRunAsync() override {
-    htrace::Scope run_scope(
-        htrace_tracer_,
-        htrace_root_scope_.GetSpanId(),
-        "run-scope-" + caffe2::to_string(run_count_++));
-    return DAGNetBase::DoRunAsync();
-  }
-
-  bool RunAt(int /* unused */, const std::vector<int>& chain) override {
+  bool RunAt(const std::vector<int>& chain) override {
     std::thread::id thread_id = std::this_thread::get_id();
     auto worker_scope = htrace_worker_scope_map_[thread_id];
 

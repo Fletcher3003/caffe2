@@ -4,7 +4,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
-import argparse
 import os
 from caffe2.python import core, workspace
 from caffe2.python.docs.formatter import Markdown
@@ -122,7 +121,6 @@ class OperatorDoc(object):
         self.name = name
         self.schema = schema
         self.priority = priority
-        print("Gathering docs for {}...".format(self.name))
         self.engines = []
 
     def addEngines(self, engines):
@@ -147,29 +145,20 @@ class OperatorDoc(object):
             formatter.addTable(table, (table == []))
 
     def generateInterface(self, formatter):
-        def makeDesc(title, args):
+        def makeDesc(title, desc):
             f = formatter.clone()
             f.addEmphasis(title, 1)
             out = [(f.dump(), '')]
-            for arg in args:
+            for name, doc in desc:
                 f = formatter.clone()
-                if isinstance(arg, tuple):
-                    name = arg[0]
-                    if len(arg) > 1:
-                        description = arg[1] or ''
-                    else:
-                        description = ''
-                else:
-                    name = arg.name
-                    description = arg.description or ''
                 f.addCode(name, inline=True)
-                out.append((f.dump(), description or ''))
+                out.append((f.dump(), doc or ''))
             return out
 
         tuples = []
 
-        if self.schema.args:
-            tuples += makeDesc('Arguments', self.schema.args)
+        if self.schema.arg_desc:
+            tuples += makeDesc('Arguments', self.schema.arg_desc)
 
         if self.schema.input_desc:
             tuples += makeDesc('Inputs', self.schema.input_desc)
@@ -178,7 +167,6 @@ class OperatorDoc(object):
             tuples += makeDesc('Outputs', self.schema.output_desc)
 
         self.generateTable(formatter, tuples, None, 'Interface')
-        print("Generated interface for {}".format(self.name))
 
     def generateCodeLink(self, formatter):
         formatter.addHeader("Code", 3)
@@ -220,12 +208,6 @@ class OperatorDoc(object):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Operators catalog generator.")
-    parser.add_argument('catalog_path', type=str,
-                        help='operators-catalogue.md to write out to')
-    args = parser.parse_args()
-
-    with open(args.catalog_path, 'w') as fp:
-        ops = OpDocGenerator(Markdown(), DocUploader())
-        ops.createBody()
-        fp.write(ops.content_body)
+    ops = OpDocGenerator(Markdown(), DocUploader())
+    ops.createBody()
+    print(ops.content_body)

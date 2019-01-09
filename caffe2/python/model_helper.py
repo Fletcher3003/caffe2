@@ -5,7 +5,7 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
-from caffe2.python import core, scope, workspace, helpers
+from caffe2.python import core, scope, workspace
 from caffe2.python.modeling import parameter_info
 from caffe2.python.modeling.parameter_sharing import (
     parameter_sharing_context,
@@ -14,7 +14,7 @@ from caffe2.python.optimizer_context import (
     OptimizerContext,
     DEFAULT_OPTIM,
 )
-from caffe2.python.regularizer_context import RegularizerContext
+from caffe2.proto import caffe2_pb2
 
 from future.utils import viewitems, viewkeys
 from itertools import chain
@@ -51,7 +51,6 @@ _known_working_ops = [
     "PackSegments",
     "Print",
     "PRelu",
-    "ReduceFrontSum",
     "Scale",
     "ScatterWeightedSum",
     "Sigmoid",
@@ -67,7 +66,7 @@ _known_working_ops = [
     "Transpose",
     "UnpackSegments",
     "WeightedSum",
-    "YellowFin"
+    "ReduceFrontSum",
 ]
 
 
@@ -220,9 +219,6 @@ class ModelHelper(object):
                 param_info.optimizer = optim_context.get_optimizer(tag)
         if not param_info.optimizer and optim_context.has_optimizer(DEFAULT_OPTIM):
             param_info.optimizer = optim_context.get_optimizer(DEFAULT_OPTIM)
-
-        reg_context = RegularizerContext.current()
-        param_info.regularizer = reg_context
 
         self._parameters_info[param_name] = param_info
         # Add param to legacy structs as well, so all other functions for
@@ -429,12 +425,12 @@ class ModelHelper(object):
         self, unused_blob_in, blob_out, batch_size, db, db_type, **kwargs
     ):
         """TensorProtosDBInput."""
-        assert len(unused_blob_in) == 0, \
-            """You cannot pass reader to model_helper.TensorProtosDBInput.
-               Use model.net.TensorProtosDBInput instead to create the op."""
-
-        return helpers.db_input.db_input(
-            self, blob_out, batch_size, db, db_type, **kwargs)
+        dbreader_name = "dbreader_" + db
+        dbreader = self.param_init_net.CreateDB(
+            [], dbreader_name,
+            db=db, db_type=db_type)
+        return self.net.TensorProtosDBInput(
+            dbreader, blob_out, batch_size=batch_size)
 
     def GetDevices(self):
         assert len(self._devices) > 0, \
@@ -447,14 +443,14 @@ class ModelHelper(object):
             raise AttributeError(op_type)
 
         if not core.IsOperator(op_type):
-            raise AttributeError(
+            raise RuntimeError(
                 'Method ' + op_type + ' is not a registered operator.' +
                 ' Did you mean: [' +
                 ','.join(workspace.C.nearby_opnames(op_type)) + ']'
             )
         if op_type not in _known_working_ops:
             if not self.allow_not_known_ops:
-                raise AttributeError(
+                raise RuntimeError(
                     "Operator {} is not known to be safe".format(op_type))
 
             logging.warning("You are creating an op that the ModelHelper "
@@ -559,26 +555,30 @@ def ExtractPredictorNet(
             # TODO: when standard argument type for "nets" is introduced,
             # this can be more general
             if op.type == 'RecurrentNetwork':
+                import google.protobuf.text_format as protobuftx
                 for arg in op.arg:
                     if arg.name == 'backward_step_net':
-                        arg.ClearField(str('n'))
+                        arg.s = b""
                     elif arg.name == 'step_net':
-                        for step_op in arg.n.op:
+                        step_proto = caffe2_pb2.NetDef()
+                        protobuftx.Merge(arg.s.decode("ascii"), step_proto)
+                        for step_op in step_proto.op:
                             rename_list(step_op.input)
                             rename_list(step_op.output)
                             if device is not None:
                                 step_op.device_option.device_type = device.device_type
                                 step_op.device_option.cuda_gpu_id = device.cuda_gpu_id
 
-                        rename_list(arg.n.external_input)
-                        rename_list(arg.n.external_output)
+                        rename_list(step_proto.external_input)
+                        rename_list(step_proto.external_output)
 
                         # Add additional external inputs
                         external_inputs.update(
-                            set(arg.n.external_input).intersection(
+                            set(step_proto.external_input).intersection(
                                 orig_external_inputs
                             )
                         )
+                        arg.s = str(step_proto).encode("ascii")
 
             if device is not None:
                 op.device_option.device_type = device.device_type

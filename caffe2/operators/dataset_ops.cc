@@ -133,7 +133,6 @@ void TreeIterator::advance(
 
 TreeWalker::TreeWalker(const vector<const Blob*>& inputs, TreeCursor& cursor)
     : inputs_(inputs), cursor_(cursor), sizes_(cursor.it.numOffsetFields()) {
-  CAFFE_ENFORCE_EQ(inputs.size(), cursor.it.fields().size());
   if (cursor.offsets.empty()) {
     cursor.offsets.assign(cursor.it.numOffsetFields(), 0);
   }
@@ -247,7 +246,6 @@ class CheckDatasetConsistencyOp : public Operator<CPUContext> {
     limits.assign(sizes.size(), std::numeric_limits<TOffset>::max());
     for (int i = 0; i < iterator_.fields().size(); ++i) {
       int lengthIdx = iterator_.fields()[i].lengthFieldId + 1;
-      CAFFE_ENFORCE_GT(Input(i).ndim(), 0);
       TOffset size = (TOffset)Input(i).dims()[0];
       if (limits[lengthIdx] == std::numeric_limits<TOffset>::max()) {
         limits[lengthIdx] = size;
@@ -386,7 +384,7 @@ class UnPackRecordsOp : public Operator<CPUContext> {
             input.size(),
             input.raw_data() /* src */,
             destinations[j] /* dst */
-        );
+            );
 
         destinations[j] =
             (char*)destinations[j] + input.size() * input.itemsize();
@@ -971,41 +969,6 @@ class CollectTensorOp final : public Operator<Context> {
   int numVisited_;
 };
 
-class TrimDatasetOp : public Operator<CPUContext> {
- public:
-  TrimDatasetOp(const OperatorDef& operator_def, Workspace* ws)
-      : Operator(operator_def, ws),
-        iterator_(OperatorBase::GetRepeatedArgument<std::string>("fields")),
-        multiple_of_(OperatorBase::GetSingleArgument<int>("multiple_of", 1)) {
-    CAFFE_ENFORCE_GE(multiple_of_, 1);
-  }
-
-  bool RunOnDevice() override {
-    TreeCursor cursor(iterator_);
-    TreeWalker walker(Inputs(), cursor);
-
-    int trimmedSize = (walker.size() / multiple_of_) * multiple_of_;
-    if (trimmedSize == walker.size()) {
-      // we already satisfy the condition
-      return true;
-    }
-    // advance desired number of records
-    for (int i = 0; i < trimmedSize; ++i) {
-      walker.advance();
-    }
-    // trim each column to the offset
-    for (int col = 0; col < walker.fields().size(); ++col) {
-      auto newOuterSize = walker.fields().at(col).offset();
-      Output(col)->Shrink(newOuterSize);
-    }
-    return true;
-  }
-
- private:
-  TreeIterator iterator_;
-  int multiple_of_;
-};
-
 REGISTER_CPU_OPERATOR(CreateTreeCursor, CreateTreeCursorOp);
 REGISTER_CPU_OPERATOR(ResetCursor, ResetCursorOp);
 REGISTER_CPU_OPERATOR(ReadNextBatch, ReadNextBatchOp);
@@ -1021,7 +984,6 @@ REGISTER_CPU_OPERATOR(ConcatTensorVector, ConcatTensorVectorOp<CPUContext>);
 REGISTER_CPU_OPERATOR(CollectTensor, CollectTensorOp<CPUContext>);
 REGISTER_CPU_OPERATOR(PackRecords, PackRecordsOp);
 REGISTER_CPU_OPERATOR(UnPackRecords, UnPackRecordsOp);
-REGISTER_CPU_OPERATOR(TrimDataset, TrimDatasetOp);
 
 OPERATOR_SCHEMA(CreateTreeCursor)
     .NumInputs(0)
@@ -1080,7 +1042,7 @@ The values of the fields will be:
   }
 
 In general, every field name in the format "{prefix}:lengths" defines a domain
-"{prefix}", and every subsequent field in the format "{prefix}:{field}" will
+"{prefix}", and every subsequent field in the format "{prefx}:{field}" will
 be in that domain, and the length of the domain is provided for each entry of
 the parent domain. In the example, "b:lengths" defines a domain of length 4, so
 every field under domain "b" will have 4 entries.
@@ -1198,7 +1160,7 @@ OPERATOR_SCHEMA(CheckDatasetConsistency)
     .NumInputs(1, INT_MAX)
     .NumOutputs(0)
     .SetDoc(R"DOC(
-Checks that the given data fields represents a consistent dataset under
+Checks that the given data fields represents a consistent dataset unther
 the schema specified by the `fields` argument. Operator fails if the fields
 are not consistent. If data is consistent, each field's data can be safely
 appended to an existing dataset, keeping it consistent.
@@ -1260,7 +1222,7 @@ OPERATOR_SCHEMA(CollectTensor)
     .SetDoc(R"DOC(
 Collect tensor into tensor vector by reservoir sampling,
 argument num_to_collect indicates the max number of tensors that will be
-collected. The first half of the inputs are tensor vectors, which are also the
+collcted. The first half of the inputs are tensor vectors, which are also the
 outputs. The second half of the inputs are the tensors to be collected into each
 vector (in the same order). The input tensors are collected in all-or-none
 manner. If they are collected, they will be placed at the same index in the
@@ -1288,20 +1250,6 @@ operators.
         " In order to reverse it back to the original input it has to be "
         "inserted into UnPackRecordsOp.");
 
-OPERATOR_SCHEMA(TrimDataset)
-    .NumInputs(1, INT_MAX)
-    .NumOutputs(1, INT_MAX)
-    .SetDoc(R"DOC(
-Trim the given dataset inplace, given the dataset blobs and the field specs.
-Trimming happens such that the dataset will contain the largest possible number
-of records that is a multiple of the 'multiple_of' argument.
-)DOC")
-    .EnforceInplace([](int input, int output) { return input == output; })
-    .Arg(
-        "fields",
-        "List of strings representing the string names in the format"
-        "specified in the doc for CreateTreeCursor.");
-
 OPERATOR_SCHEMA(UnPackRecords)
     .NumInputs(1, INT_MAX)
     .NumOutputs(1, INT_MAX)
@@ -1312,7 +1260,7 @@ returned tensors is equal to the number of fields in the `fields` argument.
 
 The first input is the packed tensor to be unpacked. Optionally, you can provide
 prototype tensors to give the expected shapes of the output tensors. This is
-helpful when you expected to unpack empty tensor, e.g., output of a sampling
+helpful when you expected to unpack empty tensor, e.g., output of a sapmling
 process.
 )DOC")
     .Arg(
@@ -1411,39 +1359,5 @@ REGISTER_BLOB_DESERIALIZER(std::unique_ptr<TreeCursor>, TreeCursorDeserializer);
 
 } // namespace
 
-void SharedTensorVectorPtrSerializer::Serialize(
-    const Blob& blob,
-    const string& name,
-    BlobSerializerBase::SerializationAcceptor acceptor) {
-  /* This is dummy serialize that doesn't save anything. If saving the content
-  is desired in future use case, you can change this serializer. Note: special
-  care need to be taken for the parameter initialization of
-  LastNWindowCollectorOp and ReservoirSamplingOp if this serializer actually
-  saves the content.
-  */
-  CAFFE_ENFORCE(blob.IsType<std::shared_ptr<std::vector<TensorCPU>>>());
-  BlobProto blob_proto;
-  blob_proto.set_name(name);
-  blob_proto.set_type("std::shared_ptr<std::vector<TensorCPU>>");
-  blob_proto.set_content("");
-  acceptor(name, blob_proto.SerializeAsString());
-};
-
-void SharedTensorVectorPtrDeserializer::Deserialize(
-    const BlobProto& /* unused */,
-    Blob* blob) {
-  /* This is dummy deserialize which creates a nullptr
-   */
-  blob->GetMutable<std::shared_ptr<std::vector<TensorCPU>>>();
-}
-
-REGISTER_BLOB_SERIALIZER(
-    (TypeMeta::Id<std::shared_ptr<std::vector<TensorCPU>>>()),
-    SharedTensorVectorPtrSerializer);
-
-REGISTER_BLOB_DESERIALIZER(
-    std::shared_ptr<std::vector<TensorCPU>>,
-    SharedTensorVectorPtrDeserializer);
-
-} // namespace dataset_ops
-} // namespace caffe2
+} // dataset_ops
+} // caffe2

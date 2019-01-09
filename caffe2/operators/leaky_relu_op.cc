@@ -39,9 +39,8 @@ REGISTER_CPU_OPERATOR(
 OPERATOR_SCHEMA(LeakyRelu)
     .NumInputs(1)
     .NumOutputs(1)
-    .Arg("alpha", "Coefficient of leakage, default value is 0.01")
+    .Arg("alpha", "Coefficient of leakage")
     .AllowInplace({{0, 0}})
-    .CostInferenceFunction(PointwiseCostInference<2>)
     .IdenticalTypeAndShape()
     .SetDoc(R"DOC(
 LeakyRelu takes input data (Tensor<T>) and an argument alpha, and produces one
@@ -54,8 +53,7 @@ OPERATOR_SCHEMA(LeakyReluGradient)
     .NumInputs(2)
     .NumOutputs(1)
     .AllowInplace({{1, 0}})
-    .Arg("alpha", "Coefficient of leakage")
-    .InheritOnnxSchema("LeakyRelu");
+    .Arg("alpha", "Coefficient of leakage");
 
 class GetLeakyReluGradient : public GradientMakerBase {
   using GradientMakerBase::GradientMakerBase;

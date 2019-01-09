@@ -7,16 +7,14 @@
 
 namespace caffe2 {
 
-template <class Context>
+template <typename T, class Context>
 class ScaleOp final : public Operator<Context> {
  public:
   USE_OPERATOR_CONTEXT_FUNCTIONS;
   ScaleOp(const OperatorDef& operator_def, Workspace* ws)
       : Operator<Context>(operator_def, ws),
         scale_(OperatorBase::GetSingleArgument<float>("scale", 1.0)) {}
-
-  template <typename T>
-  bool DoRunWithType() {
+  bool RunOnDevice() override {
     auto& X = Input(0);
     auto* Y = Output(0);
     Y->ResizeLike(X);
@@ -29,12 +27,8 @@ class ScaleOp final : public Operator<Context> {
     return true;
   }
 
-  bool RunOnDevice() override {
-    return DispatchHelper<TensorTypes<float>>::call(this, Input(0));
-  }
-
  protected:
-  float scale_;
+  T scale_;
 };
 
 } // namespace caffe2

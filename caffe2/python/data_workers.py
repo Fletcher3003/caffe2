@@ -117,8 +117,7 @@ def init_data_input_workers(
         global_coordinator.get_queue(input_source_name, max_buffered_batches),
         metrics,
         dont_rebatch,
-        batch_columns,
-        timeout=timeout
+        batch_columns
     )
 
     # Create coordinator object
@@ -210,7 +209,7 @@ class BatchFeeder(State):
 
     def _validate_chunk(self, chunk):
         if chunk is None:
-            log.warning("Fetcher function returned None")
+            print("Fetcher function returned None")
             return False
 
         assert len(chunk) == len(self._input_blob_names), \
@@ -227,7 +226,7 @@ class BatchFeeder(State):
                 j += 1
 
         if len(chunk) == 0:
-            log.warning("Worker provided zero length input")
+            print("Worker provided zero length input")
             return False
 
         return True
@@ -240,8 +239,8 @@ class BatchFeeder(State):
             try:
                 qsize = self._internal_queue.qsize()
                 if qsize < 2 and (time.time() - self._last_warning) > LOG_INT_SECS:
-                    log.warning("Warning, data loading lagging behind: " +
-                                "name={}".format(qsize, self._input_source_name))
+                    print("Warning, data loading lagging behind: " +
+                             "name={}".format(qsize, self._input_source_name))
                     self._last_warning = time.time()
                 self._counter += 1
                 self._internal_queue.put(chunk, block=True, timeout=0.5)
@@ -394,12 +393,12 @@ class BatchFeeder(State):
         if delta_seconds >= LOG_INT_SECS or force:
             inputs_per_sec = int(self._inputs / delta_seconds)
             qsize = self._internal_queue.qsize()
-            log.info("{}/{}: {} inputs/sec".format(
+            print("{}/{}: {} inputs/sec".format(
                 self._input_source_name,
                 self._namescope,
                 inputs_per_sec,
             ))
-            log.info("-- queue: {} batches".format(qsize))
+            print("-- queue: {} batches".format(qsize))
             # log and reset perf metrics
             self._metrics.put_metric(
                 'inputs_per_sec', inputs_per_sec, False)

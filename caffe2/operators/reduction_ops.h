@@ -21,14 +21,7 @@ class SumElementsOp : public Operator<Context> {
       : Operator<Context>(operator_def, ws), average_(average) {}
   ~SumElementsOp() {}
 
-  bool RunOnDevice() override
-// TODO: T21635002 fix float-divide-by-zero undefined behavior
-#if defined(__has_feature)
-#if __has_feature(__address_sanitizer__)
-      __attribute__((__no_sanitize__("float-divide-by-zero")))
-#endif
-#endif
-  {
+  bool RunOnDevice() override {
     auto& X = Input(0);
     auto* sum = Output(0);
     sum->Resize(vector<TIndex>());
@@ -48,29 +41,6 @@ class SumElementsOp : public Operator<Context> {
 
  private:
   bool average_;
-  Tensor<Context> scratch_;
-};
-
-template <typename T, class Context>
-class SumElementsIntOp : public Operator<Context> {
- public:
-  USE_OPERATOR_CONTEXT_FUNCTIONS;
-
-  SumElementsIntOp(const OperatorDef& operator_def, Workspace* ws)
-      : Operator<Context>(operator_def, ws) {}
-  ~SumElementsIntOp() {}
-
-  bool RunOnDevice() override {
-    auto& X = Input(0);
-    auto* sum = Output(0);
-    sum->Resize(vector<TIndex>());
-    T* data = sum->template mutable_data<T>();
-    math::Sum<T, Context>(
-        X.size(), X.template data<T>(), data, &context_, &scratch_);
-    return true;
-  }
-
- private:
   Tensor<Context> scratch_;
 };
 
@@ -95,18 +65,13 @@ class SumElementsGradientOp : public Operator<Context> {
   bool average_;
 };
 
-template <class Context>
+template <typename T, class Context>
 class SumSqrElementsOp : public Operator<Context> {
  public:
   USE_SIMPLE_CTOR_DTOR(SumSqrElementsOp)
   USE_OPERATOR_CONTEXT_FUNCTIONS;
 
   bool RunOnDevice() override {
-    return DispatchHelper<TensorTypes<float>>::call(this, Input(0));
-  }
-
-  template <typename T>
-  bool DoRunWithType() {
     bool average = OperatorBase::GetSingleArgument<bool>("average", false);
     auto& X = Input(0);
     auto* sum = Output(0);
@@ -120,7 +85,7 @@ class SumSqrElementsOp : public Operator<Context> {
     if (average) {
       math::Scale<T, Context>(
           1,
-          float(1.) / X.size(),
+          static_cast<T>(1.) / X.size(),
           sum->template data<T>(),
           sum->template mutable_data<T>(),
           &context_);

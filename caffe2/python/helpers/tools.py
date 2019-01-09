@@ -9,7 +9,6 @@ from __future__ import unicode_literals
 def image_input(
     model, blob_in, blob_out, order="NCHW", use_gpu_transform=False, **kwargs
 ):
-    assert 'is_test' in kwargs, "Argument 'is_test' is required"
     if order == "NCHW":
         if (use_gpu_transform):
             kwargs['use_gpu_transform'] = 1 if use_gpu_transform else 0
@@ -29,6 +28,5 @@ def image_input(
 
 
 def video_input(model, blob_in, blob_out, **kwargs):
-    # size of outputs can vary depending on kwargs
-    outputs = model.net.VideoInput(blob_in, blob_out, **kwargs)
-    return outputs
+    data, label = model.net.VideoInput(blob_in, blob_out, **kwargs)
+    return data, label

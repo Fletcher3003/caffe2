@@ -26,16 +26,13 @@ inline int GetDimFromOrderString(const string& str) {
 template <class Context>
 class SplitOp final : public Operator<Context> {
  public:
-  static const int kSplitOpInputSize = 2;
-
   USE_OPERATOR_CONTEXT_FUNCTIONS;
   SplitOp(const OperatorDef& operator_def, Workspace* ws)
       : Operator<Context>(operator_def, ws),
         split_(OperatorBase::GetRepeatedArgument<int>("split")) {
     CAFFE_ENFORCE(
-        !(OperatorBase::HasArgument("axis") &&
-          OperatorBase::HasArgument("order")),
-        "You shouldn't specify both the dim to split, and the order "
+        OperatorBase::HasArgument("axis") ^ OperatorBase::HasArgument("order"),
+        "You should either specify the dim to split, or the order "
         "in the case of 4-D images.");
     if (OperatorBase::HasArgument("axis")) {
       axis_ = OperatorBase::GetSingleArgument<int>("axis", -1);
@@ -43,9 +40,10 @@ class SplitOp final : public Operator<Context> {
       add_axis_ = OperatorBase::GetSingleArgument<int>("add_axis", 0);
     } else {
       axis_ = GetDimFromOrderString(
-          OperatorBase::GetSingleArgument<string>("order", "NCHW"));
+          OperatorBase::GetSingleArgument<string>("order", ""));
       add_axis_ = 0;
     }
+    CAFFE_ENFORCE_GE(axis_, 0);
   }
 
   bool RunOnDevice() override;
@@ -65,18 +63,18 @@ class ConcatOp final : public Operator<Context> {
   ConcatOp(const OperatorDef& operator_def, Workspace* ws)
       : Operator<Context>(operator_def, ws) {
     CAFFE_ENFORCE(
-        !(OperatorBase::HasArgument("axis") &&
-          OperatorBase::HasArgument("order")),
-        "You shouldn't specify both the dim to concat, and the order "
+        OperatorBase::HasArgument("axis") ^ OperatorBase::HasArgument("order"),
+        "You should either specify the dim to split, or the order "
         "in the case of 4-D images.");
     if (OperatorBase::HasArgument("axis")) {
       axis_ = OperatorBase::GetSingleArgument<int>("axis", -1);
       add_axis_ = OperatorBase::GetSingleArgument<int>("add_axis", 0);
     } else {
       axis_ = GetDimFromOrderString(
-          OperatorBase::GetSingleArgument<string>("order", "NCHW"));
+          OperatorBase::GetSingleArgument<string>("order", ""));
       add_axis_ = 0;
     }
+    CAFFE_ENFORCE_GE(axis_, 0);
   }
 
   bool RunOnDevice() override;
@@ -92,13 +90,11 @@ class ConcatOp final : public Operator<Context> {
 template <class Context>
 bool SplitOp<Context>::RunOnDevice() {
   auto& input = Input(0);
-  int canonical_axis = input.canonical_axis_index(axis_);
-  CAFFE_ENFORCE_LT(
-      canonical_axis, input.ndim(), "Axis not in input ndim range.");
-  const int input_channels = input.dim32(canonical_axis);
+  CAFFE_ENFORCE_LT(axis_, input.ndim(), "Axis not in input ndim range.");
+  const int input_channels = input.dim32(axis_);
   const int* axis_data;
   vector<int> equal_split;
-  if (InputSize() == kSplitOpInputSize) {
+  if (InputSize() == 2) {
     // We obtain split from the input tensor.
     CAFFE_ENFORCE_EQ(
         split_.size(),
@@ -132,23 +128,23 @@ bool SplitOp<Context>::RunOnDevice() {
       input_channels,
       "Sum of split dimensions do not match: should be ",
       input_channels);
+  int input_offset = 0;
   vector<TIndex> output_dims(input.dims());
   int before = 1, after = 1;
-  for (int i = 0; i < canonical_axis; ++i) {
+  for (int i = 0; i < axis_; ++i) {
     before *= input.dim32(i);
   }
-  for (int i = canonical_axis + 1; i < input.ndim(); ++i) {
+  for (int i = axis_ + 1; i < input.ndim(); ++i) {
     after *= input.dim32(i);
   }
   if (add_axis_) {
-    output_dims.erase(output_dims.begin() + canonical_axis);
+    output_dims.erase(output_dims.begin() + axis_);
   }
-  size_t input_offset = 0;
   for (int i = 0; i < OutputSize(); ++i) {
     auto* output = Output(i);
     auto axis_dim = add_axis_ ? 1 : axis_data[i];
     if (!add_axis_) {
-      output_dims[canonical_axis] = axis_data[i];
+      output_dims[axis_] = axis_data[i];
     }
     output->Resize(output_dims);
     math::CopyMatrix<Context>(
@@ -156,11 +152,10 @@ bool SplitOp<Context>::RunOnDevice() {
         before,
         axis_dim * after,
         static_cast<const char*>(input.raw_data()) + input_offset,
-        input.dim32(canonical_axis) * after,
+        input.dim32(axis_) * after,
         output->raw_mutable_data(input.meta()),
         axis_dim * after,
-        &context_,
-        input.meta().copy());
+        &context_);
     input_offset += axis_dim * after * input.itemsize();
   }
   return true;
@@ -173,9 +168,7 @@ bool ConcatOp<Context>::RunOnDevice() {
   split->Resize(vector<TIndex>(1, InputSize()));
   int* axis_data = split->template mutable_data<int>();
   auto& input_zero = Input(0);
-  int adj_size = input_zero.ndim() + (add_axis_ ? 1 : 0);
-  int canonical_axis = canonical_axis_index_(axis_, adj_size);
-  CAFFE_ENFORCE_LT(canonical_axis, adj_size, "Axis not in input ndim range.");
+  CAFFE_ENFORCE_LT(axis_, input_zero.ndim(), "Axis not in input ndim range.");
   for (int i = 1; i < InputSize(); ++i) {
     CAFFE_ENFORCE(
         Input(i).meta() == input_zero.meta(),
@@ -190,13 +183,13 @@ bool ConcatOp<Context>::RunOnDevice() {
   int before = 1, after = 1;
   vector<TIndex> output_dims(input_zero.dims());
   for (int i = 0; i < input_zero.ndim(); ++i) {
-    if (i == canonical_axis && !add_axis_) {
+    if (i == axis_ && !add_axis_) {
       continue;
     }
     int dim = input_zero.dim32(i);
-    if (i < canonical_axis) {
+    if (i < axis_) {
       before *= dim;
-    } else { // i > canonical_axis || i == canonical_axis && add_axis_
+    } else { // i > axis_ || i == axis_ && add_axis_
       after *= dim;
     }
     // check the input dims are compatible.
@@ -214,7 +207,7 @@ bool ConcatOp<Context>::RunOnDevice() {
           j,
           ". The input tensors can only have different dimensions "
           "when arg 'add_axis' = 0 and along the axis = ",
-          canonical_axis,
+          axis_,
           " <",
           Input(0).dims(),
           "> vs <",
@@ -225,19 +218,19 @@ bool ConcatOp<Context>::RunOnDevice() {
 
   int output_channels = 0;
   for (int i = 0; i < InputSize(); ++i) {
-    axis_data[i] = add_axis_ ? 1 : Input(i).dim32(canonical_axis);
+    axis_data[i] = add_axis_ ? 1 : Input(i).dim32(axis_);
     output_channels += axis_data[i];
   }
   if (add_axis_) {
-    output_dims.insert(output_dims.begin() + canonical_axis, output_channels);
+    output_dims.insert(output_dims.begin() + axis_, output_channels);
   } else {
-    output_dims[canonical_axis] = output_channels;
+    output_dims[axis_] = output_channels;
   }
   output->Resize(output_dims);
-  size_t output_offset = 0;
+  int output_offset = 0;
   for (int i = 0; i < InputSize(); ++i) {
     auto& input = Input(i);
-    auto axis_dim = add_axis_ ? 1 : input.dim32(canonical_axis);
+    auto axis_dim = add_axis_ ? 1 : input.dim32(axis_);
     math::CopyMatrix<Context>(
         input.itemsize(),
         before,
@@ -247,8 +240,7 @@ bool ConcatOp<Context>::RunOnDevice() {
         static_cast<char*>(output->raw_mutable_data(input_zero.meta())) +
             output_offset,
         output_channels * after,
-        &context_,
-        input_zero.meta().copy());
+        &context_);
     output_offset += axis_dim * after * input.itemsize();
   }
   return true;

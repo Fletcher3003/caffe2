@@ -16,10 +16,9 @@ class FC(SamplingTrainableMixin, ModelLayer):
 
     def __init__(self, model, input_record, output_dims, weight_init=None,
                  bias_init=None, weight_optim=None, bias_optim=None, name='fc',
-                 weight_reg=None, bias_reg=None, **kwargs):
+                 **kwargs):
         super(FC, self).__init__(model, name, input_record, **kwargs)
-        assert isinstance(input_record, schema.Scalar), (
-            "Incorrect input type {}".format(input_record))
+        assert isinstance(input_record, schema.Scalar), "Incorrect input type"
         assert len(input_record.field_types()[0].shape) > 0, (
             "FC expects limited dimensions of the input tensor")
 
@@ -36,14 +35,12 @@ class FC(SamplingTrainableMixin, ModelLayer):
         self.w = self.create_param(param_name='w',
                                    shape=[output_dims, input_dims],
                                    initializer=weight_init,
-                                   optimizer=weight_optim,
-                                   regularizer=weight_reg)
+                                   optimizer=weight_optim)
 
         self.b = self.create_param(param_name='b',
                                    shape=[output_dims, ],
                                    initializer=bias_init,
-                                   optimizer=bias_optim,
-                                   regularizer=bias_reg)
+                                   optimizer=bias_optim)
 
         self.output_schema = schema.Scalar(
             (np.float32, (output_dims, )),

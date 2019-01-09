@@ -46,8 +46,7 @@ For example, tiling [[a b c d]] by tile=2, axis=0 produces
     .Output(
         0,
         "tiled_data",
-        "Tensor that will contain input replicated along the given axis.")
-    .InheritOnnxSchema("Tile");
+        "Tensor that will contain input replicated along the given axis.");
 
 OPERATOR_SCHEMA(TileGradient).NumInputs(1, 3).NumOutputs(1);
 

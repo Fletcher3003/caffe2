@@ -462,7 +462,7 @@ bool HuffmanTreeHierarchyOp<T, Context>::RunOnDevice() {
   };
 
   // Merge two nodes and insert the results in the queue.
-  auto merge_nodes = [&nodes](
+  auto merge_nodes = [&nodes, &current_node_index](
       const std::pair<int, Node>& node_l, const std::pair<int, Node>& node_r) {
     Node node(-1, node_l.second.count + node_r.second.count);
     node.left_ch_index = node_l.first;
@@ -596,10 +596,10 @@ OPERATOR_SCHEMA(HSoftmaxSearch)
     .NumInputs(3)
     .NumOutputs(2)
     .SetDoc(R"DOC(
-HSoftmaxSearch is an operator to generate the most possible paths given a
-well-trained model and input vector. Greedy algorithm is used for pruning the
-search tree.
-)DOC")
+  HSoftmaxSearch is an operator to generate the most possible paths given a
+  well-trained model and input vector. Greedy algorithm is used for pruning the
+  search tree.
+  )DOC")
     .Arg(
         "tree",
         "Serialized TreeProto string containing a tree "
@@ -627,9 +627,9 @@ OPERATOR_SCHEMA(HuffmanTreeHierarchy)
     .NumInputs(1)
     .NumOutputs(1)
     .SetDoc(R"DOC(
-HuffmanTreeHierarchy is an operator to generate huffman tree hierarchy given
-the input labels. It returns the tree as seralized HierarchyProto
-)DOC")
+    HuffmanTreeHierarchy is an operator to generate huffman tree hierarchy given
+    the input labels. It returns the tree as seralized HierarchyProto
+    )DOC")
     .Arg("num_classes", "The number of classes used to build the hierarchy.")
     .Input(0, "Labels", "The labels vector")
     .Output(0, "Hierarch", "Huffman coding hierarchy of the labels");

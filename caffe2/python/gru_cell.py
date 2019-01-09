@@ -16,7 +16,6 @@ class GRUCell(rnn_cell.RNNCell):
         forget_bias,  # Currently unused!  Values here will be ignored.
         memory_optimization,
         drop_states=False,
-        linear_before_reset=False,
         **kwargs
     ):
         super(GRUCell, self).__init__(**kwargs)
@@ -25,7 +24,6 @@ class GRUCell(rnn_cell.RNNCell):
         self.forget_bias = float(forget_bias)
         self.memory_optimization = memory_optimization
         self.drop_states = drop_states
-        self.linear_before_reset = linear_before_reset
 
     # Unlike LSTMCell, GRUCell needs the output of one gate to feed into another.
     # (reset gate -> output_gate)
@@ -83,34 +81,18 @@ class GRUCell(rnn_cell.RNNCell):
             reset_gate_t,
             self.scope('reset_gate_t_sigmoid')
         )
-
-        # `self.linear_before_reset = True` matches cudnn semantics
-        if self.linear_before_reset:
-            output_gate_fc = brew.fc(
-                model,
-                hidden_t_prev,
-                self.scope('output_gate_t'),
-                dim_in=self.hidden_size,
-                dim_out=self.hidden_size,
-                axis=2,
-            )
-            output_gate_t = model.net.Mul(
-                [reset_gate_t_sigmoid, output_gate_fc],
-                self.scope('output_gate_t_mul')
-            )
-        else:
-            modified_hidden_t_prev = model.net.Mul(
-                [reset_gate_t_sigmoid, hidden_t_prev],
-                self.scope('modified_hidden_t_prev')
-            )
-            output_gate_t = brew.fc(
-                model,
-                modified_hidden_t_prev,
-                self.scope('output_gate_t'),
-                dim_in=self.hidden_size,
-                dim_out=self.hidden_size,
-                axis=2,
-            )
+        modified_hidden_t_prev = model.net.Mul(
+            [reset_gate_t_sigmoid, hidden_t_prev],
+            self.scope('modified_hidden_t_prev')
+        )
+        output_gate_t = brew.fc(
+            model,
+            modified_hidden_t_prev,
+            self.scope('output_gate_t'),
+            dim_in=self.hidden_size,
+            dim_out=self.hidden_size,
+            axis=2,
+        )
 
         # Add input contributions to update and output gate.
         # We already (in-place) added input contributions to the reset gate.
@@ -120,7 +102,7 @@ class GRUCell(rnn_cell.RNNCell):
         )
         output_gate_t = model.net.Sum(
             [output_gate_t, input_t_output],
-            self.scope('output_gate_t_summed'),
+            self.scope('output_gate_t'),
         )
 
         # Join gate outputs and add input contributions
@@ -137,17 +119,16 @@ class GRUCell(rnn_cell.RNNCell):
             axis=2,
         )
 
-        if seq_lengths is not None:
-            inputs = [hidden_t_prev, gates_t, seq_lengths, timestep]
-        else:
-            inputs = [hidden_t_prev, gates_t, timestep]
-
         hidden_t = model.net.GRUUnit(
-            inputs,
+            [
+                hidden_t_prev,
+                gates_t,
+                seq_lengths,
+                timestep,
+            ],
             list(self.get_state_names()),
             forget_bias=self.forget_bias,
             drop_states=self.drop_states,
-            sequence_lengths=(seq_lengths is not None),
         )
         model.net.AddExternalOutputs(hidden_t)
         return (hidden_t,)
@@ -164,9 +145,6 @@ class GRUCell(rnn_cell.RNNCell):
 
     def get_state_names(self):
         return (self.scope('hidden_t'),)
-
-    def get_output_dim(self):
-        return self.hidden_size
 
 
 GRU = functools.partial(rnn_cell._LSTM, GRUCell)

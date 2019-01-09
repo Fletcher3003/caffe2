@@ -19,27 +19,17 @@ namespace caffe2 {
  */
 class MKLContext final {
  public:
-  MKLContext() : random_seed_(RandomNumberSeed()) {}
+  MKLContext() : random_seed_(math::randomNumberSeed()) {}
   explicit MKLContext(const DeviceOption& option)
       : random_seed_(
             option.has_random_seed() ? option.random_seed()
-                                     : RandomNumberSeed()) {
+                                     : math::randomNumberSeed()) {
     CAFFE_ENFORCE_EQ(option.device_type(), MKLDNN);
   }
 
   ~MKLContext() {}
 
   inline void SwitchToDevice(int /*stream_id*/ = 0) {}
-
-  inline void WaitEvent(const Event& ev) {
-    ev.Wait(MKLDNN, this);
-  }
-
-  inline void Record(Event* ev, const char* err_msg = nullptr) const {
-    CAFFE_ENFORCE(ev, "Event must not be null.");
-    ev->Record(MKLDNN, this, err_msg);
-  }
-
   inline void FinishDeviceComputation() {}
 
   inline std::mt19937& RandGenerator() {
@@ -81,19 +71,6 @@ class MKLContext final {
     }
   }
 
-  // By default MKL operators don't have async device parts
-  static bool HasAsyncPartDefault() {
-    return false;
-  }
-
-  static bool SupportsAsyncScheduling() {
-    return false;
-  }
-
-  static bool IsStreamFree(const DeviceOption& /* unused */, int /* unused */) {
-    return true;
-  }
-
  protected:
   // TODO(jiayq): instead of hard-coding a generator, make it more flexible.
   int random_seed_{1701};
@@ -123,6 +100,7 @@ inline void MKLContext::CopyBytes<MKLContext, CPUContext>(
     void* dst) {
   memcpy(dst, src, nbytes);
 }
+
 } // namespace caffe2
 
 #endif // CAFFE2_UTILS_MKL_CONTEXT_H_

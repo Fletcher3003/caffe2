@@ -53,8 +53,7 @@ and output blobs.
 )DOC")
   .Input(0, "input", "1-D input tensor")
   .Output(0, "output", "The hyperbolic tangent values of the input tensor "
-          "computed element-wise")
-  .InheritOnnxSchema("Tanh");
+          "computed element-wise");
 
 OPERATOR_SCHEMA(TanhGradient).NumInputs(2).NumOutputs(1).AllowInplace({{1, 0}});
 

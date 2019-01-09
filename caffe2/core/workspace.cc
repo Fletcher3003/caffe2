@@ -74,7 +74,6 @@ void Workspace::PrintBlobSizes() {
 
 vector<string> Workspace::LocalBlobs() const {
   vector<string> names;
-  names.reserve(blob_map_.size());
   for (auto& entry : blob_map_) {
     names.push_back(entry.first);
   }
@@ -83,19 +82,11 @@ vector<string> Workspace::LocalBlobs() const {
 
 vector<string> Workspace::Blobs() const {
   vector<string> names;
-  names.reserve(blob_map_.size());
   for (auto& entry : blob_map_) {
     names.push_back(entry.first);
   }
-  for (const auto& forwarded : forwarded_blobs_) {
-    const auto parent_ws = forwarded.second.first;
-    const auto& parent_name = forwarded.second.second;
-    if (parent_ws->HasBlob(parent_name)) {
-      names.push_back(forwarded.first);
-    }
-  }
   if (shared_) {
-    const auto& shared_blobs = shared_->Blobs();
+    vector<string> shared_blobs = shared_->Blobs();
     names.insert(names.end(), shared_blobs.begin(), shared_blobs.end());
   }
   return names;
@@ -104,48 +95,11 @@ vector<string> Workspace::Blobs() const {
 Blob* Workspace::CreateBlob(const string& name) {
   if (HasBlob(name)) {
     VLOG(1) << "Blob " << name << " already exists. Skipping.";
-  } else if (forwarded_blobs_.count(name)) {
-    // possible if parent workspace deletes forwarded blob
-    VLOG(1) << "Blob " << name << " is already forwarded from parent workspace "
-            << "(blob " << forwarded_blobs_[name].second << "). Skipping.";
   } else {
     VLOG(1) << "Creating blob " << name;
     blob_map_[name] = unique_ptr<Blob>(new Blob());
   }
   return GetBlob(name);
-}
-
-Blob* Workspace::CreateLocalBlob(const string& name) {
-  if (blob_map_.count(name)) {
-    VLOG(1) << "Blob " << name << " already exists. Skipping.";
-  } else {
-    VLOG(1) << "Creating blob " << name;
-    blob_map_[name] = unique_ptr<Blob>(new Blob());
-  }
-  return GetBlob(name);
-}
-
-Blob* Workspace::RenameBlob(const string& old_name, const string& new_name) {
-  // We allow renaming only local blobs for API clarity purpose
-  auto it = blob_map_.find(old_name);
-  CAFFE_ENFORCE(
-      it != blob_map_.end(),
-      "Blob ",
-      old_name,
-      " is not in the local blob list");
-
-  // New blob can't be in any parent either, otherwise it will hide a parent
-  // blob
-  CAFFE_ENFORCE(
-      !HasBlob(new_name), "Blob ", new_name, "is already in the workspace");
-
-  // First delete the old record
-  auto value = std::move(it->second);
-  blob_map_.erase(it);
-
-  auto* raw_ptr = value.get();
-  blob_map_[new_name] = std::move(value);
-  return raw_ptr;
 }
 
 bool Workspace::RemoveBlob(const string& name) {
@@ -156,7 +110,7 @@ bool Workspace::RemoveBlob(const string& name) {
     return true;
   }
 
-  // won't go into shared_ here
+  // won't go into share_ here
   VLOG(1) << "Blob " << name << " not exists. Skipping.";
   return false;
 }
@@ -164,50 +118,16 @@ bool Workspace::RemoveBlob(const string& name) {
 const Blob* Workspace::GetBlob(const string& name) const {
   if (blob_map_.count(name)) {
     return blob_map_.at(name).get();
-  } else if (forwarded_blobs_.count(name)) {
-    const auto parent_ws = forwarded_blobs_.at(name).first;
-    const auto& parent_name = forwarded_blobs_.at(name).second;
-    return parent_ws->GetBlob(parent_name);
   } else if (shared_ && shared_->HasBlob(name)) {
     return shared_->GetBlob(name);
-  }
-  LOG(WARNING) << "Blob " << name << " not in the workspace.";
-  // TODO(Yangqing): do we want to always print out the list of blobs here?
-  // LOG(WARNING) << "Current blobs:";
-  // for (const auto& entry : blob_map_) {
-  //   LOG(WARNING) << entry.first;
-  // }
-  return nullptr;
-}
-
-void Workspace::AddBlobMapping(
-    const Workspace* parent,
-    const std::unordered_map<string, string>& forwarded_blobs,
-    bool skip_defined_blobs) {
-  CAFFE_ENFORCE(parent, "Parent workspace must be specified");
-  for (const auto& forwarded : forwarded_blobs) {
-    CAFFE_ENFORCE(
-        parent->HasBlob(forwarded.second),
-        "Invalid parent workspace blob " + forwarded.second);
-    if (forwarded_blobs_.count(forwarded.first)) {
-      const auto& ws_blob = forwarded_blobs_[forwarded.first];
-      CAFFE_ENFORCE_EQ(
-          ws_blob.first, parent, "Redefinition of blob " + forwarded.first);
-      CAFFE_ENFORCE_EQ(
-          ws_blob.second,
-          forwarded.second,
-          "Redefinition of blob " + forwarded.first);
-    } else {
-      if (skip_defined_blobs && HasBlob(forwarded.first)) {
-        continue;
-      }
-      CAFFE_ENFORCE(
-          !HasBlob(forwarded.first), "Redefinition of blob " + forwarded.first);
-      // Lazy blob resolution - store the parent workspace and
-      // blob name, blob value might change in the parent workspace
-      forwarded_blobs_[forwarded.first] =
-          std::make_pair(parent, forwarded.second);
-    }
+  } else {
+    LOG(WARNING) << "Blob " << name << " not in the workspace.";
+    // TODO(Yangqing): do we want to always print out the list of blobs here?
+    // LOG(WARNING) << "Current blobs:";
+    // for (const auto& entry : blob_map_) {
+    //   LOG(WARNING) << entry.first;
+    // }
+    return nullptr;
   }
 }
 
@@ -304,6 +224,7 @@ bool Workspace::RunPlan(const PlanDef& plan, ShouldContinue shouldContinue) {
   return RunPlanOnWorkspace(this, plan, shouldContinue);
 }
 
+#if CAFFE2_MOBILE
 ThreadPool* Workspace::GetThreadPool() {
   std::lock_guard<std::mutex> guard(thread_pool_creation_mutex_);
   if (!thread_pool_) {
@@ -311,5 +232,6 @@ ThreadPool* Workspace::GetThreadPool() {
   }
   return thread_pool_.get();
 }
+#endif // CAFFE2_MOBILE
 
 } // namespace caffe2

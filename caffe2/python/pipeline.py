@@ -35,13 +35,7 @@ DEFAULT_QUEUE_CAPACITY = 100
 
 
 def _init_output(output, capacity, global_init_net, global_exit_net):
-    if output is None:
-        out_queue = queue_util.Queue(
-            capacity=(
-                capacity if capacity is not None
-                else DEFAULT_QUEUE_CAPACITY))
-        writer = out_queue.writer()
-    elif isinstance(output, Writer):
+    if isinstance(output, Writer):
         assert capacity is None, 'capacity would not be used.'
         out_queue = None
         writer = output
@@ -49,6 +43,12 @@ def _init_output(output, capacity, global_init_net, global_exit_net):
         assert capacity is None, 'capacity would not be used.'
         out_queue = output
         writer = output.writer()
+    elif output is None:
+        out_queue = queue_util.Queue(
+            capacity=(
+                capacity if capacity is not None
+                else DEFAULT_QUEUE_CAPACITY))
+        writer = out_queue.writer()
     else:
         raise ValueError('output must be a reader, queue or stream.')
     writer.setup_ex(global_init_net, global_exit_net)
@@ -359,11 +359,7 @@ class ProcessingReader(Reader):
 
     def read_ex(self, init_net, exit_net):
         read_nets, status, rec = self.reader.read_record_ex(init_net, exit_net)
-        # We don't use status as stop_blob of NetBuilder it's not guarantee that
-        # it would end up being the true stob_blob. For example,
-        # ReaderWithLimitBase doesn't pass the status through but rather copy
-        # from it.
-        with NetBuilder() as nb:
+        with NetBuilder(_stop_blob=status):
             # Current NetBuilder is optionally used inside the processor,
             # then its children are retrived inside of
             # normalize_processor_output.
@@ -371,12 +367,9 @@ class ProcessingReader(Reader):
             # this logic will be more natural.
             result = normalize_processor_output(self.processor(rec))
         read_nets += result.nets
-        if result.should_stop or nb._stop_blob:
+        if result.should_stop is not None:
             stop_net = core.Net('stop_net')
-            if result.should_stop:
-                stop_net.Or([status, result.should_stop], [status])
-            if nb._stop_blob:
-                stop_net.Or([status, nb._stop_blob], [status])
+            stop_net.Copy([result.should_stop], [status])
             read_nets.append(stop_net)
         if hasattr(self.processor, 'setup'):
             init_net.add_attribute(TaskGroup.LOCAL_SETUP, self.processor)

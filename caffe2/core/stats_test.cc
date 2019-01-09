@@ -1,6 +1,4 @@
-#include <chrono>
-#include <iostream>
-#include <thread>
+#include <iostream> // NOLINT
 
 #include "caffe2/core/stats.h"
 #include <gtest/gtest.h>
@@ -74,9 +72,7 @@ TEST(StatsTest, StatsTestDuration) {
     CAFFE_AVG_EXPORTED_STAT(time_ns);
   };
   TestStats stats("stats");
-  CAFFE_DURATION(stats, time_ns) {
-    std::this_thread::sleep_for(std::chrono::microseconds(1));
-  }
+  CAFFE_DURATION(stats, time_ns) {}
 
   ExportedStatList data;
   StatRegistry::get().publish(data);

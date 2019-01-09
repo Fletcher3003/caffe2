@@ -1,8 +1,4 @@
-#include <memory>
-#include <vector>
-
 #include <gtest/gtest.h>
-
 #include "caffe2/core/blob.h"
 #include "caffe2/core/context.h"
 #include "caffe2/core/tensor.h"
@@ -104,71 +100,6 @@ TEST(MathTest, GemmNoTransTrans) {
   }
 }
 
-namespace {
-
-class GemmBatchedTest
-    : public testing::TestWithParam<testing::tuple<bool, bool>> {
- protected:
-  void SetUp() override {
-    cpu_context_ = make_unique<CPUContext>(option_);
-    X_.Resize(std::vector<TIndex>{3, 5, 10});
-    W_.Resize(std::vector<TIndex>{3, 6, 10});
-    Y_.Resize(std::vector<TIndex>{3, 5, 6});
-    math::Set<float, CPUContext>(
-        X_.size(), 1, X_.mutable_data<float>(), cpu_context_.get());
-    math::Set<float, CPUContext>(
-        W_.size(), 1, W_.mutable_data<float>(), cpu_context_.get());
-    trans_X_ = std::get<0>(GetParam());
-    trans_W_ = std::get<1>(GetParam());
-  }
-
-  void RunGemmBatched(const float alpha, const float beta) {
-    math::GemmBatched(
-        trans_X_ ? CblasTrans : CblasNoTrans,
-        trans_W_ ? CblasTrans : CblasNoTrans,
-        3,
-        5,
-        6,
-        10,
-        alpha,
-        X_.template data<float>(),
-        W_.template data<float>(),
-        beta,
-        Y_.template mutable_data<float>(),
-        cpu_context_.get());
-  }
-
-  void VerifyOutput(const float value) const {
-    for (int i = 0; i < Y_.size(); ++i) {
-      EXPECT_FLOAT_EQ(value, Y_.template data<float>()[i]);
-    }
-  }
-
-  DeviceOption option_;
-  std::unique_ptr<CPUContext> cpu_context_;
-  TensorCPU X_;
-  TensorCPU W_;
-  TensorCPU Y_;
-  bool trans_X_;
-  bool trans_W_;
-};
-
-TEST_P(GemmBatchedTest, GemmBatchedFloatTest) {
-  RunGemmBatched(1.0f, 0.0f);
-  VerifyOutput(10.0f);
-  RunGemmBatched(1.0f, 0.5f);
-  VerifyOutput(15.0f);
-  RunGemmBatched(0.5f, 1.0f);
-  VerifyOutput(20.0f);
-}
-
-INSTANTIATE_TEST_CASE_P(
-    GemmBatchedTrans,
-    GemmBatchedTest,
-    testing::Combine(testing::Bool(), testing::Bool()));
-
-} // namespace
-
 TEST(MathTest, GemvNoTrans) {
   DeviceOption option;
   CPUContext cpu_context(option);
@@ -265,105 +196,6 @@ TEST(MathTest, FloatToHalfConversion) {
   CHECK_EQ(a, converted_a);
   CHECK_EQ(b, converted_b);
   CHECK_EQ(c, converted_c);
-}
-
-TEST(MathTest, TranposeTest) {
-  DeviceOption option;
-  CPUContext cpu_context(option);
-
-  {
-    // Test for 1D transpose.
-    const std::vector<int> x_dims = {3};
-    const std::vector<int> y_dims = {3};
-    const std::vector<int> axes = {0};
-    TensorCPU X(x_dims);
-    TensorCPU Y(y_dims);
-    for (int i = 0; i < 3; ++i) {
-      X.mutable_data<float>()[i] = static_cast<float>(i + 1);
-    }
-    math::Transpose<float, CPUContext>(
-        1,
-        x_dims.data(),
-        y_dims.data(),
-        axes.data(),
-        3,
-        X.data<float>(),
-        Y.mutable_data<float>(),
-        &cpu_context);
-    for (int i = 0; i < 3; ++i) {
-      EXPECT_FLOAT_EQ(static_cast<float>(i + 1), Y.data<float>()[i]);
-    }
-  }
-
-  {
-    // Test for 2D transpose.
-    const std::vector<int> x_dims = {2, 3};
-    const std::vector<int> y_dims = {3, 2};
-    const std::vector<int> axes = {1, 0};
-    TensorCPU X(x_dims);
-    TensorCPU Y(y_dims);
-    for (int i = 0; i < 6; ++i) {
-      X.mutable_data<float>()[i] = static_cast<float>(i + 1);
-    }
-    math::Transpose<float, CPUContext>(
-        2,
-        x_dims.data(),
-        y_dims.data(),
-        axes.data(),
-        6,
-        X.data<float>(),
-        Y.mutable_data<float>(),
-        &cpu_context);
-    const std::vector<float> expected_output = {
-        1.0f, 4.0f, 2.0f, 5.0f, 3.0f, 6.0f};
-    for (int i = 0; i < 6; ++i) {
-      EXPECT_FLOAT_EQ(expected_output[i], Y.data<float>()[i]);
-    }
-  }
-
-  {
-    // Test for 3D transpose.
-    const std::vector<int> x_dims = {2, 2, 2};
-    const std::vector<int> y_dims = {2, 2, 2};
-    const std::vector<int> axes1 = {1, 2, 0};
-    TensorCPU X(x_dims);
-    TensorCPU Y(y_dims);
-    for (int i = 0; i < 8; ++i) {
-      X.mutable_data<float>()[i] = static_cast<float>(i + 1);
-    }
-    math::Transpose<float, CPUContext>(
-        3,
-        x_dims.data(),
-        y_dims.data(),
-        axes1.data(),
-        8,
-        X.data<float>(),
-        Y.mutable_data<float>(),
-        &cpu_context);
-    const std::vector<float> expected_output1 = {
-        1.0f, 5.0f, 2.0f, 6.0f, 3.0f, 7.0f, 4.0f, 8.0f};
-    for (int i = 0; i < 8; ++i) {
-      EXPECT_FLOAT_EQ(expected_output1[i], Y.data<float>()[i]);
-    }
-
-    const std::vector<int> axes2 = {1, 0, 2};
-    math::Set<float, CPUContext>(
-        Y.size(), 0.0f, Y.mutable_data<float>(), &cpu_context);
-    math::Transpose<float, CPUContext>(
-        3,
-        x_dims.data(),
-        y_dims.data(),
-        axes2.data(),
-        8,
-        X.data<float>(),
-        Y.mutable_data<float>(),
-        &cpu_context);
-    const std::vector<float> expected_output2 = {
-        1.0f, 2.0f, 5.0f, 6.0f, 3.0f, 4.0f, 7.0f, 8.0f};
-    for (int i = 0; i < 8; ++i) {
-      EXPECT_FLOAT_EQ(expected_output2[i], Y.data<float>()[i]);
-    }
-  }
 }
 
 } // namespace caffe2

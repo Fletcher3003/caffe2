@@ -6,10 +6,8 @@ from __future__ import print_function
 from __future__ import unicode_literals
 
 import logging
-
-from caffe2.python import core, schema, scope, utils, workspace
+from caffe2.python import core, schema, scope, workspace
 from caffe2.python.layers.tags import TagContext
-from caffe2.proto import caffe2_pb2
 
 from collections import namedtuple
 import numpy as np
@@ -27,7 +25,7 @@ def get_key(record):
     elif schema.equal_schemas(record, IdScoreList, check_field_types=False):
         key = 'values:keys'
     else:
-        raise NotImplementedError('Not implemented for {}'.format(record))
+        raise NotImplementedError()
     assert record[key].metadata is not None, (
         "Blob {} doesn't have metadata".format(str(record[key]())))
     return record[key]
@@ -36,10 +34,6 @@ def get_key(record):
 def get_categorical_limit(record):
     key = get_key(record)
     return key.metadata.categorical_limit
-
-
-def get_avg_length(record):
-    return record['lengths'].metadata.expected_value
 
 
 def set_request_only(field):
@@ -120,7 +114,7 @@ LayerPsParam = namedtuple('LayerPsParam', ['sparse_key', 'average_length'])
 class LayerParameter(object):
 
     def __init__(self, parameter=None, optimizer=None, initializer=None,
-                 ps_param=None, regularizer=None):
+                 ps_param=None):
         assert isinstance(parameter, core.BlobReference), \
             "expect {0} to be a blob reference".format(str(parameter))
         # need to put the following line (shape) before initialier
@@ -130,7 +124,6 @@ class LayerParameter(object):
         self.optimizer = optimizer
         self.initializer = initializer
         self.ps_param = ps_param
-        self.regularizer = regularizer
 
     @property
     def initializer(self):
@@ -138,22 +131,19 @@ class LayerParameter(object):
 
     @initializer.setter
     def initializer(self, op):
-        assert op is None or core.IsOperator(getattr(op, 'type', None)), \
+        assert core.IsOperator(getattr(op, 'type', None)), \
             "initializer expects an operator, got type: {}".format(type(op))
         self._initializer = op
         if op is not None:
-            self.shape = self._infer_shape_from_initializer()
+            shape = self._infer_shape_from_initializer()
+            assert self.shape is None or self.shape == shape, \
+                "inconsistent shape for layer parameter:"\
+                " {}, expect: {}, but got {}".format(self, self.shape, shape)
+            self._shape = shape
 
     @property
     def shape(self):
         return self._shape
-
-    @shape.setter
-    def shape(self, shape):
-        assert self.shape is None or self.shape == shape, \
-            "inconsistent shape for layer parameter:"\
-            " {}, expect: {}, but got {}".format(self, self.shape, shape)
-        self._shape = shape
 
     def _infer_shape_from_initializer(self):
         for arg in self.initializer.arg:
@@ -166,14 +156,11 @@ class LayerParameter(object):
                 shape_blob = net.NextScopedBlob(self.parameter + "_shape")
                 net.Shape([self.parameter], shape_blob)
                 workspace.RunNetOnce(net)
-                shape = workspace.FetchBlob(shape_blob).tolist()
-                # ResetWorkspace to save memory
-                workspace.ResetWorkspace()
-                return shape
-            except RuntimeError as exp:
+                return workspace.FetchBlob(shape_blob).tolist()
+            except RuntimeError:
                 logger.warning(
-                    "Cannot infer the shape of blob {} from operator {}: {}".format(
-                        self.parameter, self.initializer.type, exp)
+                    "Cannot infer the shape of blob {} from operator {}".format(
+                        self.parameter, self.initializer.type)
                 )
                 workspace.ResetWorkspace()
                 return None
@@ -243,8 +230,6 @@ class ModelLayer(object):
         self.tags = set(tags or [])
         self.tags.update(TagContext.current().tags)
         self.params = []
-        self._export_output_for_metrics = False
-        self._export_params_for_metrics = False
 
     def get_type(self):
         return self.__class__.__name__
@@ -309,37 +294,17 @@ class ModelLayer(object):
             # internal.containers.RepeatedCompositeFieldContainer, but
             # the version of protobuf in fbcode does not support append
             # so extend is used
-            init_op = param.initializer
-            current_device_scope = scope.CurrentDeviceScope()
-            if not init_op:
-                continue
-
-            if not init_op.HasField('device_option') and\
-                    current_device_scope:
-                init_op = caffe2_pb2.OperatorDef()
-                init_op.CopyFrom(param.initializer)
-                init_op.device_option.CopyFrom(current_device_scope)
-
-            # do not add duplicated init ops
-            if any(utils.OpAlmostEqual(op, init_op, 'debug_info')
-                   for op in init_net._net.op):
-                continue
-
-            init_net._net.op.extend([init_op])
+            if param.initializer:
+                init_net._net.op.extend([param.initializer])
 
     def create_param(self, param_name, shape, initializer, optimizer,
-                     ps_param=None, regularizer=None):
+                       ps_param=None):
         with scope.NameScope(self.name, reset=True):
             param = self.model.create_param(param_name=param_name,
                                             shape=shape,
                                             initializer=initializer,
                                             optimizer=optimizer,
-                                            ps_param=ps_param,
-                                            regularizer=regularizer)
-
-            # make sure we don't share parameters in the same layer
-            assert all(param.parameter != p.parameter for p in self.params)
-
+                                            ps_param=ps_param)
             self.params.append(param)
             return param.parameter
 
@@ -372,23 +337,17 @@ class ModelLayer(object):
             else:
                 self.add_ops(net)
 
-            if context in {InstantiationContext.TRAINING,
-                           InstantiationContext.EVAL} \
-               and self._export_params_for_metrics:
-                self.add_param_copy_operators(net)
-
     def add_ops(self, net):
-        # Predict layer implementation.
         raise NotImplementedError
 
     def add_eval_ops(self, net):
-        # Default eval layer implementation is completely matching
-        # predict layer implementation.
+        # Default train layer implementation is completely matching predict
+        # layer implementation.
         self.add_ops(net)
 
     def add_train_ops(self, net):
-        # Default train layer implementation is completely matching
-        # eval layer implementation.
+        # Default eval layer implementation is completely matching eval
+        # layer implementation.
         self.add_eval_ops(net)
 
     def add_ops_to_accumulate_pred(self, net):
@@ -397,24 +356,3 @@ class ModelLayer(object):
         # purpose. Default layer implementation is completely matching eval
         # layer implementation.
         self.add_eval_ops(net)
-
-    def add_param_copy_operators(self, net):
-        for param in self.params:
-            param_copy_ref = self.model.metrics_schema[str(param.parameter)]
-            net.Copy([param.parameter], param_copy_ref.field_blobs())
-
-    def export_output_for_metrics(self):
-        self._export_output_for_metrics = True
-
-        # Export output of the layer directly
-        export_name = self.name + "/output"
-        self.model.add_metric_field(export_name, self.output_schema)
-
-    def export_params_for_metrics(self):
-        self._export_params_for_metrics = True
-
-        # Export copies of parameters
-        for param in self.params:
-            param_copy_ref = self.get_next_blob_reference(
-                str(param).split("/")[-1] + "_copy")
-            self.model.add_metric_field(str(param.parameter), param_copy_ref)

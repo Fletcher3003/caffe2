@@ -2,22 +2,7 @@
 
 namespace caffe2 {
 
-template <>
-template <typename T>
-void ReplaceNaNOp<CPUContext>::ReplaceNaN(
-    const T& value,
-    const TIndex size,
-    const T* X,
-    T* Y) {
-  for (TIndex i = 0; i < size; i++) {
-    if (std::isnan(X[i])) {
-      Y[i] = value;
-    } else {
-      Y[i] = X[i];
-    }
-  }
-}
-
+namespace {
 REGISTER_CPU_OPERATOR(ReplaceNaN, ReplaceNaNOp<CPUContext>);
 
 OPERATOR_SCHEMA(ReplaceNaN)
@@ -34,4 +19,5 @@ Replace the NaN (not a number) element in the input tensor with argument `value`
 
 SHOULD_NOT_DO_GRADIENT(ReplaceNaN);
 
+} // namespace
 } // namespace caffe2

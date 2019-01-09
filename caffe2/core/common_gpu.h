@@ -2,25 +2,11 @@
 #define CAFFE2_CORE_COMMON_GPU_H_
 
 #include <assert.h>
+#include <cublas_v2.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
-
-// Disable strict aliasing errors for CUDA 9.
-// The cuda_fp16.h header in CUDA 9 RC triggers this diagnostic.
-// It is included by cusparse.h as well, so guarding the
-// inclusion of that header here is not enough.
-#if CUDA_VERSION >= 9000
-#ifdef __GNUC__
-#if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6)
-#pragma GCC diagnostic push
-#endif
-#pragma GCC diagnostic ignored "-Wstrict-aliasing"
-#endif // __GNUC__
-#endif // CUDA_VERSION >= 9000
-
-#include <cublas_v2.h>
 #include <curand.h>
-#include <driver_types.h>
+#include <driver_types.h>  // cuda driver types
 
 #include "caffe2/core/logging.h"
 #include "caffe2/core/common.h"
@@ -41,15 +27,6 @@
 #include <cuda_fp16.h>
 #endif
 
-// Re-enable strict aliasing diagnostic if it was disabled.
-#if CUDA_VERSION >= 9000
-#ifdef __GNUC__
-#if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6)
-#pragma GCC diagnostic pop
-#endif
-#endif // __GNUC__
-#endif // CUDA_VERSION >= 9000
-
 /**
  * The maximum number of GPUs that caffe2 recognizes.
  */
@@ -64,13 +41,6 @@
 #define CAFFE2_CUDA_MAX_PEER_SIZE 8
 
 namespace caffe2 {
-
-#if CUDA_VERSION >= 9000
-/**
- * Empty class to identify TensorCore-based math
- */
-class TensorCoreEngine {};
-#endif
 
 /**
  * A runtime function to report the cuda version that Caffe2 is built with.
@@ -90,23 +60,27 @@ int NumCudaDevices();
  * cuda gpus present in the machine, or there are hardware configuration
  * problems like an insufficient driver, this function will still return false,
  * meaning that there is no usable GPU present.
- *
- * In the open source build, it is possible that Caffe2's GPU code is
- * dynamically loaded, and as a result a library could be only linked to the
- * CPU code, but want to test if cuda is later available or not. In this case,
- * one should use HasCudaRuntime() from common.h.
  */
 inline bool HasCudaGPU() { return NumCudaDevices() > 0; }
 
 /**
- * Gets the current GPU id. This is a simple wrapper around cudaGetDevice().
+ * Sets the default GPU id for Caffe2.
+ *
+ * If an operator is set to run on Cuda GPU but no gpu id is given, we will use
+ * the default gpu id to run the operator. Before this function is explicitly
+ * called, GPU 0 will be the default GPU id.
  */
-int CaffeCudaGetDevice();
+void SetDefaultGPUID(const int deviceid);
+
+/**
+ * Gets the default GPU id for Caffe2.
+ */
+int GetDefaultGPUID();
 
 /**
  * Gets the current GPU id. This is a simple wrapper around cudaGetDevice().
  */
-void CaffeCudaSetDevice(const int id);
+int GetCurrentGPUID();
 
 /**
  * Gets the GPU id that the current pointer is located at.
@@ -114,7 +88,7 @@ void CaffeCudaSetDevice(const int id);
 int GetGPUIDForPointer(const void* ptr);
 
 /**
- * Gets the device property for the given device. This function is thread safe.
+ * Gets the device property for the given device.
  */
 const cudaDeviceProp& GetDeviceProperty(const int device);
 
@@ -133,11 +107,6 @@ void DeviceQuery(const int deviceid);
 bool GetCudaPeerAccessPattern(vector<vector<bool> >* pattern);
 
 /**
- * Return the availability of TensorCores for math
- */
-bool TensorCoreAvailable();
-
-/**
  * Return a human readable cublas error string.
  */
 const char* cublasGetErrorString(cublasStatus_t error);
@@ -148,7 +117,7 @@ const char* cublasGetErrorString(cublasStatus_t error);
 const char* curandGetErrorString(curandStatus_t error);
 
 // CUDA: various checks for different function calls.
-#define CUDA_ENFORCE(condition, ...)     \
+#define CUDA_ENFORCE(condition)     \
   do {                              \
     cudaError_t error = condition;  \
     CAFFE_ENFORCE_EQ(               \
@@ -159,7 +128,7 @@ const char* curandGetErrorString(curandStatus_t error);
         ":",                        \
         __LINE__,                   \
         ": ",                       \
-        cudaGetErrorString(error), ##__VA_ARGS__); \
+        cudaGetErrorString(error)); \
   } while (0)
 #define CUDA_CHECK(condition)                                 \
   do {                                                        \
@@ -227,8 +196,9 @@ const char* curandGetErrorString(curandStatus_t error);
         << ::caffe2::curandGetErrorString(status); \
   } while (0)
 
-#define CUDA_1D_KERNEL_LOOP(i, n)                                 \
-  for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; i < (n); \
+#define CUDA_1D_KERNEL_LOOP(i, n)                                              \
+  for (int i = blockIdx.x * blockDim.x + threadIdx.x;                          \
+       i < (n);                                                                \
        i += blockDim.x * gridDim.x)
 
 // CUDA_KERNEL_ASSERT is a macro that wraps an assert() call inside cuda
@@ -267,24 +237,21 @@ constexpr int CAFFE_MAXIMUM_NUM_BLOCKS = 4096;
  * @brief Compute the number of blocks needed to run N threads.
  */
 inline int CAFFE_GET_BLOCKS(const int N) {
-  return std::max(
-      std::min(
-          (N + CAFFE_CUDA_NUM_THREADS - 1) / CAFFE_CUDA_NUM_THREADS,
-          CAFFE_MAXIMUM_NUM_BLOCKS),
-      // Use at least 1 block, since CUDA does not allow empty block
-      1);
+  return std::min((N + CAFFE_CUDA_NUM_THREADS - 1) / CAFFE_CUDA_NUM_THREADS,
+                  CAFFE_MAXIMUM_NUM_BLOCKS);
 }
 
 class DeviceGuard {
  public:
-  explicit DeviceGuard(int newDevice) : previous_(CaffeCudaGetDevice()) {
+  explicit DeviceGuard(int newDevice)
+      : previous_(GetCurrentGPUID()) {
     if (previous_ != newDevice) {
-      CaffeCudaSetDevice(newDevice);
+      CUDA_ENFORCE(cudaSetDevice(newDevice));
     }
   }
 
   ~DeviceGuard() noexcept {
-    CaffeCudaSetDevice(previous_);
+    CUDA_CHECK(cudaSetDevice(previous_));
   }
 
  private:

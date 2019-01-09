@@ -13,12 +13,6 @@ import caffe2.python.hypothesis_test_util as hu
 import numpy as np
 
 
-def _fill_diagonal(shape, value):
-    result = np.zeros(shape)
-    np.fill_diagonal(result, value)
-    return (result,)
-
-
 class TestFillerOperator(hu.HypothesisTestCase):
 
     @given(**hu.gcs)
@@ -81,99 +75,6 @@ class TestFillerOperator(hu.HypothesisTestCase):
             np.testing.assert_array_equal(shape, blob_out.shape)
             self.assertTrue((blob_out >= a).all())
             self.assertTrue((blob_out <= b).all())
-
-    @given(
-        **hu.gcs
-    )
-    def test_uniform_fill_using_arg(self, gc, dc):
-        net = core.Net('test_net')
-        shape = [2**3, 5]
-        # uncomment this to test filling large blob
-        # shape = [2**30, 5]
-        min_v = -100
-        max_v = 100
-        output_blob = net.UniformIntFill(
-            [],
-            ['output_blob'],
-            shape=shape,
-            min=min_v,
-            max=max_v,
-        )
-
-        workspace.RunNetOnce(net)
-        output_data = workspace.FetchBlob(output_blob)
-
-        np.testing.assert_array_equal(shape, output_data.shape)
-        min_data = np.min(output_data)
-        max_data = np.max(output_data)
-
-        self.assertGreaterEqual(min_data, min_v)
-        self.assertLessEqual(max_data, max_v)
-
-        self.assertNotEqual(min_data, max_data)
-
-    @given(
-        shape=st.sampled_from(
-            [
-                [3, 3],
-                [5, 5, 5],
-                [7, 7, 7, 7],
-            ]
-        ),
-        **hu.gcs
-    )
-    def test_diagonal_fill_op_float(self, shape, gc, dc):
-        value = 2.5
-        op = core.CreateOperator(
-            'DiagonalFill',
-            [],
-            'out',
-            shape=shape,  # scalar
-            value=value,
-        )
-
-        for device_option in dc:
-            op.device_option.CopyFrom(device_option)
-            # Check against numpy reference
-            self.assertReferenceChecks(gc, op, [shape, value], _fill_diagonal)
-
-    @given(**hu.gcs)
-    def test_diagonal_fill_op_int(self, gc, dc):
-        value = 2
-        shape = [3, 3]
-        op = core.CreateOperator(
-            'DiagonalFill',
-            [],
-            'out',
-            shape=shape,
-            dtype=core.DataType.INT32,
-            value=value,
-        )
-
-        # Check against numpy reference
-        self.assertReferenceChecks(gc, op, [shape, value], _fill_diagonal)
-
-    @given(lengths=st.lists(st.integers(min_value=0, max_value=10),
-                            min_size=0,
-                            max_size=10),
-           **hu.gcs)
-    def test_lengths_range_fill(self, lengths, gc, dc):
-        op = core.CreateOperator(
-            "LengthsRangeFill",
-            ["lengths"],
-            ["increasing_seq"])
-
-        def _len_range_fill(lengths):
-            sids = []
-            for _, l in enumerate(lengths):
-                sids.extend(list(range(l)))
-            return (np.array(sids, dtype=np.int32), )
-
-        self.assertReferenceChecks(
-            device_option=gc,
-            op=op,
-            inputs=[np.array(lengths, dtype=np.int32)],
-            reference=_len_range_fill)
 
     @given(**hu.gcs)
     def test_gaussian_fill_op(self, gc, dc):

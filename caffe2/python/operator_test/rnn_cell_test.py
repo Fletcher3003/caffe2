@@ -13,27 +13,22 @@ from caffe2.proto import caffe2_pb2
 import caffe2.python.hypothesis_test_util as hu
 
 from functools import partial
-from hypothesis import assume, given
+from hypothesis import given
 from hypothesis import settings as ht_settings
 import hypothesis.strategies as st
 import numpy as np
-import unittest
 
 
-def lstm_unit(*args, **kwargs):
-    forget_bias = kwargs.get('forget_bias', 0.0)
-    drop_states = kwargs.get('drop_states', False)
-    sequence_lengths = kwargs.get('sequence_lengths', True)
-
-    if sequence_lengths:
-        hidden_t_prev, cell_t_prev, gates, seq_lengths, timestep = args
-    else:
-        hidden_t_prev, cell_t_prev, gates, timestep = args
+def lstm_unit(hidden_t_prev, cell_t_prev, gates,
+              seq_lengths, timestep, forget_bias=0.0, drop_states=False):
     D = cell_t_prev.shape[2]
     G = gates.shape[2]
     N = gates.shape[1]
     t = (timestep * np.ones(shape=(N, D))).astype(np.int32)
     assert t.shape == (N, D)
+    seq_lengths = (np.ones(shape=(N, D)) *
+                   seq_lengths.reshape(N, 1)).astype(np.int32)
+    assert seq_lengths.shape == (N, D)
     assert G == 4 * D
     # Resize to avoid broadcasting inconsistencies with NumPy
     gates = gates.reshape(N, 4, D)
@@ -46,13 +41,7 @@ def lstm_unit(*args, **kwargs):
     f_t = sigmoid(f_t + forget_bias)
     o_t = sigmoid(o_t)
     g_t = tanh(g_t)
-    if sequence_lengths:
-        seq_lengths = (np.ones(shape=(N, D)) *
-                       seq_lengths.reshape(N, 1)).astype(np.int32)
-        assert seq_lengths.shape == (N, D)
-        valid = (t < seq_lengths).astype(np.int32)
-    else:
-        valid = np.ones(shape=(N, D))
+    valid = (t < seq_lengths).astype(np.int32)
     assert valid.shape == (N, D)
     cell_t = ((f_t * cell_t_prev) + (i_t * g_t)) * (valid) + \
         (1 - valid) * cell_t_prev * (1 - drop_states)
@@ -62,76 +51,6 @@ def lstm_unit(*args, **kwargs):
     hidden_t = hidden_t.reshape(1, N, D)
     cell_t = cell_t.reshape(1, N, D)
     return hidden_t, cell_t
-
-
-def layer_norm_with_scale_and_bias_ref(X, scale, bias, axis=-1, epsilon=1e-4):
-    left = np.prod(X.shape[:axis])
-    reshaped = np.reshape(X, [left, -1])
-    mean = np.mean(reshaped, axis=1).reshape([left, 1])
-    stdev = np.sqrt(
-        np.mean(np.square(reshaped), axis=1).reshape([left, 1]) -
-        np.square(mean) + epsilon
-    )
-    norm = (reshaped - mean) / stdev
-    norm = np.reshape(norm, X.shape)
-    adjusted = scale * norm + bias
-
-    return adjusted
-
-
-def layer_norm_lstm_reference(
-    input,
-    hidden_input,
-    cell_input,
-    gates_w,
-    gates_b,
-    gates_t_norm_scale,
-    gates_t_norm_bias,
-    seq_lengths,
-    forget_bias,
-    drop_states=False
-):
-    T = input.shape[0]
-    N = input.shape[1]
-    G = input.shape[2]
-    D = hidden_input.shape[hidden_input.ndim - 1]
-    hidden = np.zeros(shape=(T + 1, N, D))
-    cell = np.zeros(shape=(T + 1, N, D))
-    assert hidden.shape[0] == T + 1
-    assert cell.shape[0] == T + 1
-    assert hidden.shape[1] == N
-    assert cell.shape[1] == N
-    cell[0, :, :] = cell_input
-    hidden[0, :, :] = hidden_input
-    for t in range(T):
-        input_t = input[t].reshape(1, N, G)
-        print(input_t.shape)
-        hidden_t_prev = hidden[t].reshape(1, N, D)
-        cell_t_prev = cell[t].reshape(1, N, D)
-        gates = np.dot(hidden_t_prev, gates_w.T) + gates_b
-        gates = gates + input_t
-
-        gates = layer_norm_with_scale_and_bias_ref(
-            gates, gates_t_norm_scale, gates_t_norm_bias
-        )
-
-        hidden_t, cell_t = lstm_unit(
-            hidden_t_prev,
-            cell_t_prev,
-            gates,
-            seq_lengths,
-            t,
-            forget_bias=forget_bias,
-            drop_states=drop_states,
-        )
-        hidden[t + 1] = hidden_t
-        cell[t + 1] = cell_t
-    return (
-        hidden[1:],
-        hidden[-1].reshape(1, N, D),
-        cell[1:],
-        cell[-1].reshape(1, N, D)
-    )
 
 
 def lstm_reference(input, hidden_input, cell_input,
@@ -156,11 +75,11 @@ def lstm_reference(input, hidden_input, cell_input,
         gates = np.dot(hidden_t_prev, gates_w.T) + gates_b
         gates = gates + input_t
         hidden_t, cell_t = lstm_unit(
-            hidden_t_prev,
-            cell_t_prev,
-            gates,
-            seq_lengths,
-            t,
+            hidden_t_prev=hidden_t_prev,
+            cell_t_prev=cell_t_prev,
+            gates=gates,
+            seq_lengths=seq_lengths,
+            timestep=t,
             forget_bias=forget_bias,
             drop_states=drop_states,
         )
@@ -210,8 +129,6 @@ def compute_regular_attention_logits(
     attention_v,
     weighted_encoder_outputs,
     encoder_outputs_for_dot_product,
-    coverage_prev,
-    coverage_weights,
 ):
     weighted_hidden_t = np.dot(
         hidden_t,
@@ -234,8 +151,6 @@ def compute_recurrent_attention_logits(
     attention_v,
     weighted_encoder_outputs,
     encoder_outputs_for_dot_product,
-    coverage_prev,
-    coverage_weights,
 ):
     weighted_hidden_t = np.dot(
         hidden_t,
@@ -265,8 +180,6 @@ def compute_dot_attention_logits(
     attention_v,
     weighted_encoder_outputs,
     encoder_outputs_for_dot_product,
-    coverage_prev,
-    coverage_weights,
 ):
     hidden_t_for_dot_product = np.transpose(hidden_t, axes=[1, 2, 0])
     if (
@@ -287,32 +200,6 @@ def compute_dot_attention_logits(
     return np.transpose(attention_logits_t)
 
 
-def compute_coverage_attention_logits(
-    hidden_t,
-    weighted_decoder_hidden_state_t_w,
-    weighted_decoder_hidden_state_t_b,
-    attention_weighted_encoder_context_t_prev,
-    weighted_prev_attention_context_w,
-    weighted_prev_attention_context_b,
-    attention_v,
-    weighted_encoder_outputs,
-    encoder_outputs_for_dot_product,
-    coverage_prev,
-    coverage_weights,
-):
-    weighted_hidden_t = np.dot(
-        hidden_t,
-        weighted_decoder_hidden_state_t_w.T,
-    ) + weighted_decoder_hidden_state_t_b
-    coverage_part = coverage_prev.T * coverage_weights
-    encoder_part = weighted_encoder_outputs + coverage_part
-    attention_v = attention_v.reshape([-1])
-    return np.sum(
-        attention_v * np.tanh(encoder_part + weighted_hidden_t),
-        axis=2,
-    )
-
-
 def lstm_with_attention_reference(
     input,
     initial_hidden_state,
@@ -327,7 +214,6 @@ def lstm_with_attention_reference(
     weighted_decoder_hidden_state_t_w,
     weighted_decoder_hidden_state_t_b,
     weighted_encoder_outputs,
-    coverage_weights,
     attention_v,
     attention_zeros,
     compute_attention_logits,
@@ -353,9 +239,6 @@ def lstm_with_attention_reference(
     attention_weighted_encoder_context[0, :, :] = (
         initial_attention_weighted_encoder_context
     )
-    encoder_length = encoder_outputs.shape[0]
-    coverage = np.zeros(
-        shape=(decoder_input_length + 1, batch_size, encoder_length))
     for t in range(decoder_input_length):
         input_t = input[t].reshape(1, batch_size, decoder_input_dim)
         hidden_t_prev = hidden[t].reshape(1, batch_size, decoder_state_dim)
@@ -371,11 +254,9 @@ def lstm_with_attention_reference(
         gates = np.dot(gates_input, gates_w.T) + gates_b
         gates = gates + input_t
         hidden_t, cell_t = lstm_unit(hidden_t_prev, cell_t_prev, gates,
-                                     decoder_input_lengths, t)
+                                     decoder_input_lengths, t, 0)
         hidden[t + 1] = hidden_t
         cell[t + 1] = cell_t
-
-        coverage_prev = coverage[t].reshape(1, batch_size, encoder_length)
 
         attention_logits_t = compute_attention_logits(
             hidden_t,
@@ -387,8 +268,6 @@ def lstm_with_attention_reference(
             attention_v,
             weighted_encoder_outputs,
             encoder_outputs_for_dot_product,
-            coverage_prev,
-            coverage_weights,
         )
 
         attention_logits_t_exp = np.exp(attention_logits_t)
@@ -396,7 +275,6 @@ def lstm_with_attention_reference(
             attention_logits_t_exp /
             np.sum(attention_logits_t_exp, axis=0).reshape([1, -1])
         )
-        coverage[t + 1, :, :] = coverage[t, :, :] + attention_weights_t.T
         attention_weighted_encoder_context[t + 1] = np.sum(
             (
                 encoder_outputs *
@@ -449,7 +327,6 @@ def lstm_with_regular_attention_reference(
         weighted_decoder_hidden_state_t_w=weighted_decoder_hidden_state_t_w,
         weighted_decoder_hidden_state_t_b=weighted_decoder_hidden_state_t_b,
         weighted_encoder_outputs=weighted_encoder_outputs,
-        coverage_weights=None,
         attention_v=attention_v,
         attention_zeros=attention_zeros,
         compute_attention_logits=compute_regular_attention_logits,
@@ -489,7 +366,6 @@ def lstm_with_recurrent_attention_reference(
         weighted_decoder_hidden_state_t_w=weighted_decoder_hidden_state_t_w,
         weighted_decoder_hidden_state_t_b=weighted_decoder_hidden_state_t_b,
         weighted_encoder_outputs=weighted_encoder_outputs,
-        coverage_weights=None,
         attention_v=attention_v,
         attention_zeros=attention_zeros,
         compute_attention_logits=compute_recurrent_attention_logits,
@@ -524,7 +400,6 @@ def lstm_with_dot_attention_reference(
         weighted_decoder_hidden_state_t_w=weighted_decoder_hidden_state_t_w,
         weighted_decoder_hidden_state_t_b=weighted_decoder_hidden_state_t_b,
         weighted_encoder_outputs=None,
-        coverage_weights=None,
         attention_v=None,
         attention_zeros=None,
         compute_attention_logits=compute_dot_attention_logits,
@@ -585,46 +460,6 @@ def lstm_with_dot_attention_reference_different_dim(
     )
 
 
-def lstm_with_coverage_attention_reference(
-    input,
-    initial_hidden_state,
-    initial_cell_state,
-    initial_attention_weighted_encoder_context,
-    initial_coverage,
-    gates_w,
-    gates_b,
-    decoder_input_lengths,
-    weighted_decoder_hidden_state_t_w,
-    weighted_decoder_hidden_state_t_b,
-    weighted_encoder_outputs,
-    coverage_weights,
-    attention_v,
-    attention_zeros,
-    encoder_outputs_transposed,
-):
-    return lstm_with_attention_reference(
-        input=input,
-        initial_hidden_state=initial_hidden_state,
-        initial_cell_state=initial_cell_state,
-        initial_attention_weighted_encoder_context=(
-            initial_attention_weighted_encoder_context
-        ),
-        gates_w=gates_w,
-        gates_b=gates_b,
-        decoder_input_lengths=decoder_input_lengths,
-        encoder_outputs_transposed=encoder_outputs_transposed,
-        weighted_prev_attention_context_w=None,
-        weighted_prev_attention_context_b=None,
-        weighted_decoder_hidden_state_t_w=weighted_decoder_hidden_state_t_w,
-        weighted_decoder_hidden_state_t_b=weighted_decoder_hidden_state_t_b,
-        weighted_encoder_outputs=weighted_encoder_outputs,
-        coverage_weights=coverage_weights,
-        attention_v=attention_v,
-        attention_zeros=attention_zeros,
-        compute_attention_logits=compute_coverage_attention_logits,
-    )
-
-
 def milstm_reference(
         input,
         hidden_input,
@@ -665,65 +500,7 @@ def milstm_reference(
             gates,
             seq_lengths,
             t,
-            forget_bias=forget_bias,
-            drop_states=drop_states,
-        )
-        hidden[t + 1] = hidden_t
-        cell[t + 1] = cell_t
-    return (
-        hidden[1:],
-        hidden[-1].reshape(1, N, D),
-        cell[1:],
-        cell[-1].reshape(1, N, D)
-    )
-
-
-def layer_norm_milstm_reference(
-        input,
-        hidden_input,
-        cell_input,
-        gates_w,
-        gates_b,
-        alpha,
-        beta1,
-        beta2,
-        b,
-        gates_t_norm_scale,
-        gates_t_norm_bias,
-        seq_lengths,
-        forget_bias,
-        drop_states=False):
-    T = input.shape[0]
-    N = input.shape[1]
-    G = input.shape[2]
-    D = hidden_input.shape[hidden_input.ndim - 1]
-    hidden = np.zeros(shape=(T + 1, N, D))
-    cell = np.zeros(shape=(T + 1, N, D))
-    assert hidden.shape[0] == T + 1
-    assert cell.shape[0] == T + 1
-    assert hidden.shape[1] == N
-    assert cell.shape[1] == N
-    cell[0, :, :] = cell_input
-    hidden[0, :, :] = hidden_input
-    for t in range(T):
-        input_t = input[t].reshape(1, N, G)
-        hidden_t_prev = hidden[t].reshape(1, N, D)
-        cell_t_prev = cell[t].reshape(1, N, D)
-        gates = np.dot(hidden_t_prev, gates_w.T) + gates_b
-        gates = (alpha * gates * input_t) + \
-                    (beta1 * gates) + \
-                    (beta2 * input_t) + \
-                    b
-        gates = layer_norm_with_scale_and_bias_ref(
-            gates, gates_t_norm_scale, gates_t_norm_bias
-        )
-        hidden_t, cell_t = lstm_unit(
-            hidden_t_prev,
-            cell_t_prev,
-            gates,
-            seq_lengths,
-            t,
-            forget_bias=forget_bias,
+            forget_bias,
             drop_states=drop_states,
         )
         hidden[t + 1] = hidden_t
@@ -842,7 +619,6 @@ def _prepare_attention(t, n, dim_in, encoder_dim,
                 dropout_ratio=0.0,
                 name='dropout',
                 forward_only=forward_only,
-                is_test=False,
             )
 
         attention_cell = (
@@ -916,6 +692,7 @@ def prepare_mul_rnn(model, input_blob, shape, T, outputs_with_grad, num_layers):
 
 
 class RNNCellTest(hu.HypothesisTestCase):
+
     @given(
         input_tensor=hu.tensor(min_dim=3, max_dim=3, max_value=3),
         num_layers=st.integers(1, 4),
@@ -937,12 +714,12 @@ class RNNCellTest(hu.HypothesisTestCase):
                                 outputs_with_grad, num_layers))
             workspace.RunNetOnce(model.param_init_net)
             nets.append(model.net)
-            workspace.blobs[input_blob] = input_tensor
 
-        gradient_checker.NetGradientChecker.CompareNets(
-            nets, outputs, outputs_with_grad_ids=outputs_with_grad,
-            inputs_with_grads=[input_blob],
-        )
+            workspace.blobs[input_blob] = input_tensor
+            gradient_checker.NetGradientChecker.CompareNets(
+                nets, outputs, outputs_with_grad_ids=outputs_with_grad,
+                inputs_with_grads=[input_blob],
+            )
 
     @given(
         input_tensor=hu.tensor(min_dim=3, max_dim=3, max_value=3),
@@ -1075,36 +852,27 @@ class RNNCellTest(hu.HypothesisTestCase):
                 workspace.RunNetOnce(net)
                 workspace.ResetWorkspace()
 
-    def test_lstm(self):
-        self.lstm_base(lstm_type=(rnn_cell.LSTM, lstm_reference))
-
-    def test_milstm(self):
-        self.lstm_base(lstm_type=(rnn_cell.MILSTM, milstm_reference))
-
-    @unittest.skip("This is currently numerically unstable")
-    def test_norm_lstm(self):
-        self.lstm_base(
-            lstm_type=(rnn_cell.LayerNormLSTM, layer_norm_lstm_reference),
-        )
-
-    @unittest.skip("This is currently numerically unstable")
-    def test_norm_milstm(self):
-        self.lstm_base(
-            lstm_type=(rnn_cell.LayerNormMILSTM, layer_norm_milstm_reference)
-        )
-
     @given(
-        seed=st.integers(0, 2**32 - 1),
         input_tensor=lstm_input(),
         forget_bias=st.floats(-10.0, 10.0),
         fwd_only=st.booleans(),
         drop_states=st.booleans(),
-        memory_optim=st.booleans(),
-        outputs_with_grads=st.sampled_from([[0], [1], [0, 1, 2, 3]]),
     )
-    def lstm_base(self, seed, lstm_type, outputs_with_grads, memory_optim,
+    @ht_settings(max_examples=3, timeout=100)
+    @utils.debug
+    def test_lstm_main(self, **kwargs):
+        for lstm_type in [(rnn_cell.LSTM, lstm_reference),
+                          (rnn_cell.MILSTM, milstm_reference)]:
+            for outputs_with_grads in [[0], [1], [0, 1, 2, 3]]:
+                for memory_optim in [False, True]:
+                    self.lstm_base(lstm_type,
+                                   outputs_with_grads=outputs_with_grads,
+                                   memory_optim=memory_optim,
+                                   **kwargs)
+
+    def lstm_base(self, lstm_type, outputs_with_grads, memory_optim,
                   input_tensor, forget_bias, fwd_only, drop_states):
-        np.random.seed(seed)
+        print("LSTM test parameters: ", locals())
         create_lstm, ref = lstm_type
         ref = partial(ref, forget_bias=forget_bias)
 
@@ -1125,11 +893,6 @@ class RNNCellTest(hu.HypothesisTestCase):
                            input_tensor)
         op = net._net.op[-1]
         inputs = [workspace.FetchBlob(name) for name in op.input]
-
-        # Validate forward only mode is in effect
-        if fwd_only:
-            for arg in op.arg:
-                self.assertFalse(arg.name == 'backward_step_net')
 
         self.assertReferenceChecks(
             hu.cpu_do,
@@ -1193,10 +956,10 @@ class RNNCellTest(hu.HypothesisTestCase):
         self.assertTrue('seqlengths' in predict_net.Proto().external_input)
         for einp in predict_net.Proto().external_input:
             if einp == 'seqlengths':
-                workspace.FeedBlob(
-                    "seqlengths",
-                    np.array([10] * 4, dtype=np.int32)
-                )
+                    workspace.FeedBlob(
+                        "seqlengths",
+                        np.array([10] * 4, dtype=np.int32)
+                    )
             else:
                 workspace.FeedBlob(
                     einp,
@@ -1210,15 +973,18 @@ class RNNCellTest(hu.HypothesisTestCase):
         self.assertTrue(workspace.RunNet(predict_net.Proto().name))
 
         # Validate device options set correctly for the RNNs
+        import google.protobuf.text_format as protobuftx
         for op in predict_net.Proto().op:
             if op.type == 'RecurrentNetwork':
                 for arg in op.arg:
                     if arg.name == "step_net":
-                        for step_op in arg.n.op:
+                        step_proto = caffe2_pb2.NetDef()
+                        protobuftx.Merge(arg.s.decode("ascii"), step_proto)
+                        for step_op in step_proto.op:
                             self.assertEqual(0, step_op.device_option.device_type)
                             self.assertEqual(1, step_op.device_option.cuda_gpu_id)
                     elif arg.name == 'backward_step_net':
-                        self.assertEqual(caffe2_pb2.NetDef(), arg.n)
+                        self.assertEqual(b"", arg.s)
 
     def test_lstm_params(self):
         model = ModelHelper(name="lstm_params_test")
@@ -1249,24 +1015,6 @@ class RNNCellTest(hu.HypothesisTestCase):
                 initial_states=None,
                 dim_in=20,
                 dim_out=[40, 20],
-                scope="test",
-                drop_states=True,
-                return_last_layer_only=True,
-            )
-        for param in model.GetParams():
-            self.assertNotEqual(model.get_param_info(param), None)
-
-    def test_layer_norm_lstm_params(self):
-        model = ModelHelper(name="layer_norm_lstm_params_test")
-
-        with core.DeviceScope(core.DeviceOption(caffe2_pb2.CPU, 0)):
-            output, _, _, _ = rnn_cell.LayerNormLSTM(
-                model=model,
-                input_blob="input",
-                seq_lengths="seqlengths",
-                initial_states=None,
-                dim_in=20,
-                dim_out=40,
                 scope="test",
                 drop_states=True,
                 return_last_layer_only=True,
@@ -1394,36 +1142,6 @@ class RNNCellTest(hu.HypothesisTestCase):
             gc,
         )
 
-    @given(encoder_output_length=st.integers(2, 3),
-           encoder_output_dim=st.integers(1, 3),
-           decoder_input_length=st.integers(1, 3),
-           decoder_state_dim=st.integers(1, 3),
-           batch_size=st.integers(1, 3),
-           **hu.gcs)
-    def test_lstm_with_coverage_attention(
-        self,
-        encoder_output_length,
-        encoder_output_dim,
-        decoder_input_length,
-        decoder_state_dim,
-        batch_size,
-        gc,
-        dc,
-    ):
-        self.lstm_with_attention(
-            partial(
-                rnn_cell.LSTMWithAttention,
-                attention_type=AttentionType.SoftCoverage,
-            ),
-            encoder_output_length,
-            encoder_output_dim,
-            decoder_input_length,
-            decoder_state_dim,
-            batch_size,
-            lstm_with_coverage_attention_reference,
-            gc,
-        )
-
     def lstm_with_attention(
         self,
         create_lstm_with_attention,
@@ -1498,14 +1216,6 @@ class RNNCellTest(hu.HypothesisTestCase):
             ).astype(np.float32),
         )
         workspace.FeedBlob(
-            'external/LSTMWithAttention/coverage_weights',
-            np.random.randn(
-                encoder_output_length,
-                batch_size,
-                encoder_output_dim,
-            ).astype(np.float32),
-        )
-        workspace.FeedBlob(
             decoder_input_lengths,
             np.random.randint(
                 0,
@@ -1524,10 +1234,6 @@ class RNNCellTest(hu.HypothesisTestCase):
             initial_attention_weighted_encoder_context,
             np.random.randn(
                 1, batch_size, encoder_output_dim).astype(np.float32)
-        )
-        workspace.FeedBlob(
-            'external/LSTMWithAttention/initial_coverage',
-            np.zeros((1, batch_size, encoder_output_length)).astype(np.float32),
         )
         inputs = [workspace.FetchBlob(name) for name in op.input]
         self.assertReferenceChecks(
@@ -1554,67 +1260,38 @@ class RNNCellTest(hu.HypothesisTestCase):
                 stepsize=0.001,
             )
 
-    @given(seed=st.integers(0, 2**32 - 1),
-           n=st.integers(1, 10),
+    @given(n=st.integers(1, 10),
            d=st.integers(1, 10),
            t=st.integers(1, 10),
-           dtype=st.sampled_from([np.float32, np.float16]),
-           use_sequence_lengths=st.booleans(),
            **hu.gcs)
-    def test_lstm_unit_recurrent_network(
-            self, seed, n, d, t, dtype, dc, use_sequence_lengths, gc):
-        np.random.seed(seed)
-        if dtype == np.float16:
-            # only supported with CUDA
-            assume(gc.device_type == caffe2_pb2.CUDA)
-            dc = [do for do in dc if do.device_type == caffe2_pb2.CUDA]
-
-        if use_sequence_lengths:
-            op_inputs = ['hidden_t_prev', 'cell_t_prev', 'gates_t',
-                         'seq_lengths', 'timestep']
-        else:
-            op_inputs = ['hidden_t_prev', 'cell_t_prev', 'gates_t', 'timestep']
+    def test_lstm_unit_recurrent_network(self, n, d, t, dc, gc):
         op = core.CreateOperator(
             'LSTMUnit',
-            op_inputs,
-            ['hidden_t', 'cell_t'],
-            sequence_lengths=use_sequence_lengths,
-        )
-        cell_t_prev = np.random.randn(1, n, d).astype(dtype)
-        hidden_t_prev = np.random.randn(1, n, d).astype(dtype)
-        gates = np.random.randn(1, n, 4 * d).astype(dtype)
+            [
+                'hidden_t_prev',
+                'cell_t_prev',
+                'gates_t',
+                'seq_lengths',
+                'timestep',
+            ],
+            ['hidden_t', 'cell_t'])
+        cell_t_prev = np.random.randn(1, n, d).astype(np.float32)
+        hidden_t_prev = np.random.randn(1, n, d).astype(np.float32)
+        gates = np.random.randn(1, n, 4 * d).astype(np.float32)
         seq_lengths = np.random.randint(1, t + 1, size=(n,)).astype(np.int32)
         timestep = np.random.randint(0, t, size=(1,)).astype(np.int32)
-        if use_sequence_lengths:
-            inputs = [hidden_t_prev, cell_t_prev, gates, seq_lengths, timestep]
-        else:
-            inputs = [hidden_t_prev, cell_t_prev, gates, timestep]
+        inputs = [hidden_t_prev, cell_t_prev, gates, seq_lengths, timestep]
         input_device_options = {'timestep': hu.cpu_do}
         self.assertDeviceChecks(
             dc, op, inputs, [0],
             input_device_options=input_device_options)
-
-        kwargs = {}
-        if dtype == np.float16:
-            kwargs['threshold'] = 1e-1  # default is 1e-4
-
-        def lstm_unit_reference(*args, **kwargs):
-            return lstm_unit(*args, sequence_lengths=use_sequence_lengths, **kwargs)
-
         self.assertReferenceChecks(
-            gc, op, inputs, lstm_unit_reference,
-            input_device_options=input_device_options,
-            **kwargs)
-
-        kwargs = {}
-        if dtype == np.float16:
-            kwargs['threshold'] = 0.5  # default is 0.005
-
+            gc, op, inputs, lstm_unit,
+            input_device_options=input_device_options)
         for i in range(2):
             self.assertGradientChecks(
                 gc, op, inputs, i, [0, 1],
-                input_device_options=input_device_options,
-                **kwargs)
+                input_device_options=input_device_options)
 
     @given(input_length=st.integers(2, 5),
            dim_in=st.integers(1, 3),
@@ -1648,7 +1325,7 @@ class RNNCellTest(hu.HypothesisTestCase):
             initial_states=None,
             dim_in=dim_in,
             dim_out=dim_out,
-            # scope='test',
+            scope='test',
             outputs_with_grads=(0,),
             return_params=False,
             memory_optimization=False,
@@ -1681,27 +1358,22 @@ class RNNCellTest(hu.HypothesisTestCase):
 
         for i in range(num_layers):
             hidden_input_list.append(
-                workspace.FetchBlob(
-                    'layer_{}/initial_hidden_state'.format(i)),
+                workspace.FetchBlob('test/initial_hidden_state_{}'.format(i)),
             )
             cell_input_list.append(
-                workspace.FetchBlob(
-                    'layer_{}/initial_cell_state'.format(i)),
+                workspace.FetchBlob('test/initial_cell_state_{}'.format(i)),
             )
-            # Input projection for the first layer is produced outside
-            # of the cell ans thus not scoped
-            prefix = 'layer_{}/'.format(i) if i > 0 else ''
             i2h_w_list.append(
-                workspace.FetchBlob('{}i2h_w'.format(prefix)),
+                workspace.FetchBlob('test/layer_{}/i2h_w'.format(i)),
             )
             i2h_b_list.append(
-                workspace.FetchBlob('{}i2h_b'.format(prefix)),
+                workspace.FetchBlob('test/layer_{}/i2h_b'.format(i)),
             )
             gates_w_list.append(
-                workspace.FetchBlob('layer_{}/gates_t_w'.format(i)),
+                workspace.FetchBlob('test/layer_{}/gates_t_w'.format(i)),
             )
             gates_b_list.append(
-                workspace.FetchBlob('layer_{}/gates_t_b'.format(i)),
+                workspace.FetchBlob('test/layer_{}/gates_t_b'.format(i)),
             )
 
         workspace.RunNetOnce(model.net)
@@ -1758,11 +1430,3 @@ class RNNCellTest(hu.HypothesisTestCase):
                 step_size=0.0001,
                 threshold=0.05,
             )
-
-
-if __name__ == "__main__":
-    workspace.GlobalInit([
-        'caffe2',
-        '--caffe2_log_level=0',
-    ])
-    unittest.main()

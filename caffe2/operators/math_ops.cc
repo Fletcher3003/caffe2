@@ -45,25 +45,58 @@ class GetSqrGradient : public GradientMakerBase {
 };
 REGISTER_GRADIENT(Sqr, GetSqrGradient);
 
-struct SignCPUFunctor {
-  template <typename T>
-  inline void
-  operator()(const int n, const T* x, T* y, CPUContext* device_context) {
-    for (int i = 0; i < n; ++i) {
-      y[i] = (-T(1) * (x[i] < 0)) + (x[i] > 0);
-    }
+REGISTER_CPU_OPERATOR(
+    Pow,
+    UnaryElementwiseWithArgsOp<TensorTypes<float>, CPUContext, PowFunctor>);
+
+OPERATOR_SCHEMA(Pow)
+    .NumInputs(1)
+    .NumOutputs(1)
+    .Arg("exponent", "The exponent of the power function.")
+    .AllowInplace({{0, 0}})
+    .IdenticalTypeAndShape()
+    .SetDoc(R"DOC(
+Pow takes input data (Tensor<T>) and an argument exponent, and
+produces one output data (Tensor<T>) where the function `f(x) = x^exponent`,
+is applied to the data tensor elementwise.
+)DOC")
+    .Input(0, "X", "Input tensor of any shape")
+    .Output(0, "Y", "Output tensor (same size as X)");
+
+class GetPowGradient : public GradientMakerBase {
+  using GradientMakerBase::GradientMakerBase;
+  vector<OperatorDef> GetGradientDefs() override {
+    ArgumentHelper arg_helper(def_);
+    float exponent = arg_helper.GetSingleArgument<float>("exponent", 0.0);
+    Argument scale_arg;
+    scale_arg.set_name("scale");
+    scale_arg.set_f(exponent);
+    Argument pow_arg;
+    pow_arg.set_name("exponent");
+    pow_arg.set_f(exponent - 1);
+    return vector<OperatorDef>{CreateOperatorDef(
+                                   "Pow",
+                                   "",
+                                   std::vector<string>{I(0)},
+                                   std::vector<string>{GI(0)},
+                                   std::vector<Argument>{pow_arg}),
+                               CreateOperatorDef(
+                                   "Mul",
+                                   "",
+                                   std::vector<string>{GI(0), GO(0)},
+                                   std::vector<string>{GI(0)}),
+                               CreateOperatorDef(
+                                   "Scale",
+                                   "",
+                                   std::vector<string>{GI(0)},
+                                   std::vector<string>{GI(0)},
+                                   std::vector<Argument>{scale_arg})};
+  }
+  virtual bool CopyArguments() const override {
+    return false;
   }
 };
 
-REGISTER_CPU_OPERATOR(
-    Sign,
-    UnaryElementwiseOp<TensorTypes<float>, CPUContext, SignCPUFunctor>);
-
-OPERATOR_SCHEMA(Sign)
-    .NumInputs(1)
-    .NumOutputs(1)
-    .SetDoc("Computes sign for each element of the input: -1, 0 or 1.")
-    .IdenticalTypeAndShape();
-SHOULD_NOT_DO_GRADIENT(Sign);
+REGISTER_GRADIENT(Pow, GetPowGradient);
 
 } // namespace caffe2

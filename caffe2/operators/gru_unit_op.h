@@ -30,7 +30,7 @@ void GRUUnit(
     T* H,
     Context* /*context*/) {
   for (int n = 0; n < N; ++n) {
-    const bool valid = seqLengths == nullptr || t < seqLengths[n];
+    const bool valid = t < seqLengths[n];
 
     for (int d = 0; d < D; ++d) {
       if (!valid) {
@@ -69,7 +69,7 @@ void GRUUnitGradient(
     T* X_diff,
     Context* /*context*/) {
   for (int n = 0; n < N; ++n) {
-    const bool valid = seqLengths == nullptr || t < seqLengths[n];
+    const bool valid = t < seqLengths[n];
 
     for (int d = 0; d < D; ++d) {
       T* h_prev_diff = H_prev_diff + d;
@@ -116,16 +116,10 @@ class GRUUnitOp : public Operator<Context> {
       : Operator<Context>(operator_def, ws),
         drop_states_(OperatorBase::template GetSingleArgument<bool>(
             "drop_states",
-            false)),
-        sequence_lengths_(OperatorBase::template GetSingleArgument<bool>(
-            "sequence_lengths",
-            true)) {}
+            false)) {}
   USE_OPERATOR_CONTEXT_FUNCTIONS;
 
   bool RunOnDevice() override {
-    // handle potentially-missing sequence lengths input
-    const size_t TIMESTEP = SEQ_LENGTHS + (sequence_lengths_ ? 1 : 0);
-
     // Extract N
     const auto N = Input(HIDDEN_T_M_1).dim(1);
 
@@ -136,15 +130,10 @@ class GRUUnitOp : public Operator<Context> {
     CAFFE_ENFORCE_EQ(3 * D, G);
     const auto* H_prev = Input(HIDDEN_T_M_1).template data<T>();
     const auto* X = Input(GATES).template data<T>();
-
-    const int32_t* seqLengths = nullptr;
-    if (sequence_lengths_) {
-      CAFFE_ENFORCE_EQ(Input(SEQ_LENGTHS).size(), N);
-      seqLengths = Input(SEQ_LENGTHS).template data<int32_t>();
-    }
-
-    const auto t = static_cast<OperatorBase*>(this)->
-      Input<Tensor<CPUContext>>(TIMESTEP).template data<int32_t>()[0];
+    CAFFE_ENFORCE_EQ(Input(SEQ_LENGTHS).size(), N);
+    const auto* seqLengths = Input(SEQ_LENGTHS).template data<int32_t>();
+    const auto t = OperatorBase::Input<Tensor<CPUContext>>(TIMESTEP)
+                       .template data<int32_t>()[0];
     Output(HIDDEN_T)->ResizeLike(Input(HIDDEN_T_M_1));
     auto* H = Output(HIDDEN_T)->template mutable_data<T>();
 
@@ -154,14 +143,11 @@ class GRUUnitOp : public Operator<Context> {
   }
 
  protected:
-  INPUT_TAGS(HIDDEN_T_M_1, GATES, SEQ_LENGTHS);
-  // additional input tags are determined dynamically based on whether
-  // sequence_lengths is present.
+  INPUT_TAGS(HIDDEN_T_M_1, GATES, SEQ_LENGTHS, TIMESTEP);
   OUTPUT_TAGS(HIDDEN_T);
 
  private:
   bool drop_states_;
-  bool sequence_lengths_;
 };
 
 template <typename T, typename Context>
@@ -171,19 +157,10 @@ class GRUUnitGradientOp : public Operator<Context> {
       : Operator<Context>(operator_def, ws),
         drop_states_(OperatorBase::template GetSingleArgument<bool>(
             "drop_states",
-            false)),
-        sequence_lengths_(OperatorBase::template GetSingleArgument<bool>(
-            "sequence_lengths",
-            true)) {}
+            false)) {}
   USE_OPERATOR_CONTEXT_FUNCTIONS;
 
   bool RunOnDevice() override {
-    // handle potentially-missing sequence lengths input
-    const size_t inputOffset = SEQ_LENGTHS + (sequence_lengths_ ? 1 : 0);
-    const size_t TIMESTEP = inputOffset;
-    const size_t HIDDEN_T = inputOffset + 1;
-    const size_t HIDDEN_T_GRAD = inputOffset + 2;
-
     // Extract N
     const auto N = Input(HIDDEN_T_M_1).dim(1);
 
@@ -194,17 +171,11 @@ class GRUUnitGradientOp : public Operator<Context> {
     CAFFE_ENFORCE_EQ(3 * D, G);
     const auto* H_prev = Input(HIDDEN_T_M_1).template data<T>();
     const auto* X = Input(GATES).template data<T>();
-    const auto t = static_cast<OperatorBase*>(this)->
-      Input<Tensor<CPUContext>>(TIMESTEP).template data<int32_t>()[0];
+    const auto t = OperatorBase::Input<Tensor<CPUContext>>(TIMESTEP)
+                       .template data<int32_t>()[0];
     const auto* H = Input(HIDDEN_T).template data<T>();
     const auto* H_diff = Input(HIDDEN_T_GRAD).template data<T>();
-
-    const int32_t* seqLengths = nullptr;
-    if (sequence_lengths_) {
-      CAFFE_ENFORCE_EQ(Input(SEQ_LENGTHS).size(), N);
-      seqLengths = Input(SEQ_LENGTHS).template data<int32_t>();
-    }
-
+    const auto* seqLengths = Input(SEQ_LENGTHS).template data<int32_t>();
     Output(HIDDEN_T_M_1_GRAD)->ResizeLike(Input(HIDDEN_T_M_1));
     auto* H_prev_diff = Output(HIDDEN_T_M_1_GRAD)->template mutable_data<T>();
     Output(GATES_GRAD)->ResizeLike(Input(GATES));
@@ -227,12 +198,17 @@ class GRUUnitGradientOp : public Operator<Context> {
   }
 
  protected:
-  INPUT_TAGS(HIDDEN_T_M_1, GATES, SEQ_LENGTHS);
+  INPUT_TAGS(
+      HIDDEN_T_M_1,
+      GATES,
+      SEQ_LENGTHS,
+      TIMESTEP,
+      HIDDEN_T,
+      HIDDEN_T_GRAD, );
   OUTPUT_TAGS(HIDDEN_T_M_1_GRAD, GATES_GRAD);
 
  private:
   bool drop_states_;
-  bool sequence_lengths_;
 };
 
 } // namespace caffe2

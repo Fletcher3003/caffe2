@@ -19,7 +19,7 @@ def softmax(w):
 
 
 class CTCOpsTest(test_util.TestCase):
-    def verify_cost(self, device_option, is_test):
+    def verify_cost(self, device_option):
         alphabet_size = 5
         N = 1
         T = 2
@@ -36,14 +36,10 @@ class CTCOpsTest(test_util.TestCase):
         input_lengths = np.asarray([T]).astype(np.int32)
 
         net = core.Net("test-net")
-        output_blobs = ["costs", "workspace"] if is_test \
-                else ["inputs_grad_to_be_copied", "costs", "workspace"]
         net.CTC(["inputs", "labels", "label_lengths", "input_lengths"],
-                output_blobs,
-                is_test=is_test,
+                ["inputs_grad_to_be_copied", "costs", "workspace"],
                 device_option=device_option)
-        if not is_test:
-            net.AddGradientOperators(["costs"])
+        net.AddGradientOperators(["costs"])
         self.ws.create_blob("inputs").feed(inputs, device_option=device_option)
         self.ws.create_blob("labels").feed(labels)
         self.ws.create_blob("label_lengths").feed(label_lengths)
@@ -56,32 +52,18 @@ class CTCOpsTest(test_util.TestCase):
         cost = self.ws.blobs["costs"].fetch()[0]
         print(cost)
         self.assertAlmostEqual(np.exp(-cost), expected)
-        if not is_test:
-            # Make sure inputs_grad was added by AddGradientOperators and
-            # it is equal to the inputs_grad_to_be_copied blob returned by CTCop
-            assert np.array_equal(
-                self.ws.blobs["inputs_grad"].fetch(),
-                self.ws.blobs["inputs_grad_to_be_copied"].fetch()
-            )
+        # Make sure inputs_grad was added by AddGradientOperators and
+        # it is equal to the inputs_grad_to_be_copied blob returned by CTCop
+        assert np.array_equal(
+            self.ws.blobs["inputs_grad"].fetch(),
+            self.ws.blobs["inputs_grad_to_be_copied"].fetch()
+        )
 
     def test_ctc_cost_cpu(self):
         self.verify_cost(
-            caffe2_pb2.DeviceOption(device_type=caffe2_pb2.CPU),
-            is_test=False)
+            caffe2_pb2.DeviceOption(device_type=caffe2_pb2.CPU))
 
     def test_ctc_cost_gpu(self):
         self.verify_cost(
             caffe2_pb2.DeviceOption(device_type=caffe2_pb2.CUDA,
-                                    cuda_gpu_id=0),
-            is_test=False)
-
-    def test_ctc_forward_only_cpu(self):
-        self.verify_cost(
-            caffe2_pb2.DeviceOption(device_type=caffe2_pb2.CPU),
-            is_test=True)
-
-    def test_ctc_forward_only_gpu(self):
-        self.verify_cost(
-            caffe2_pb2.DeviceOption(device_type=caffe2_pb2.CUDA,
-                                    cuda_gpu_id=0),
-            is_test=True)
+                                    cuda_gpu_id=0))

@@ -14,7 +14,7 @@ OPERATOR_SCHEMA(SparseToDenseMask)
     .TensorInferenceFunction([](const OperatorDef& def,
                                 const vector<TensorShape>& in) {
       ArgumentHelper helper(def);
-      auto mask = helper.template GetRepeatedArgument<int64_t>("mask");
+      auto mask = helper.template GetRepeatedArgument<int>("mask");
       bool return_presence_mask = helper.template GetSingleArgument<bool>(
           "return_presence_mask", false);
       vector<TensorShape> out(1);
@@ -47,8 +47,10 @@ vector and `values` tensor into a compacted tensor where the first dimension
 corresponds to each id provided in mask argument. Missing values are filled with
 the value of `default_value`. After running this op:
 
-  output[j, :] = values[i] # where mask[j] == indices[i]
-  output[j, ...] = default_value # when mask[j] doesn't appear in indices
+```
+output[j, :] = values[i] # where mask[j] == indices[i]
+output[j, ...] = default_value # when mask[j] doesn't appear in indices
+```
 
 If `lengths` is provided and not empty, and extra "batch" dimension is prepended
 to the output.

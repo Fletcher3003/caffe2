@@ -35,6 +35,13 @@ class MKLPoolOp final : public ConvPoolOpBase<MKLContext> {
     }
   }
 
+  ~MKLPoolOp() {
+    if (workspace_buffer_ != NULL) {
+      dnnReleaseBuffer<T>(workspace_buffer_);
+      workspace_buffer_ = NULL;
+    }
+  }
+
   bool RunOnDeviceWithOrderNCHW() override;
   bool RunOnDeviceWithOrderNHWC() override;
 
@@ -44,7 +51,7 @@ class MKLPoolOp final : public ConvPoolOpBase<MKLContext> {
   vector<TIndex> cached_input_dims_;
   // vector<TIndex> cached_avgpool_input_dims_;
   LayoutWrapper<T> workspace_layout_;
-  std::unique_ptr<MKLWorkspace<T>> workspace_buffer_;
+  T* workspace_buffer_ = nullptr;
   PrimitiveWrapper<T> primitive_;
   MKLMemory<T> buffer_;
   void* resources_[dnnResourceNumber] = {0};
@@ -58,7 +65,7 @@ bool MKLPoolOp<float>::RunOnDeviceWithOrderNCHW() {
 
   bool dims_changed;
   CHECK_INPUT_DIMS(X, dims_changed);
-  if (dims_changed || FLAGS_caffe2_mkl_memonger_in_use) {
+  if (dims_changed) {
     // We will utilize the SetOutputSize() function in the base class
     // with dummy TensorCPU input and output to calculate the sizes.
     TensorCPU dummy_input(X.dims());
@@ -88,22 +95,19 @@ bool MKLPoolOp<float>::RunOnDeviceWithOrderNCHW() {
     buffer_.Reset(dummy_output.dims(), primitive_, dnnResourceDst, true);
 
     workspace_layout_.Reset(primitive_, dnnResourceWorkspace);
-    workspace_buffer_ =
-        caffe2::make_unique<MKLWorkspace<float>>(workspace_layout_);
+    MKLDNN_SAFE_CALL(mkl::dnnAllocateBuffer<float>(
+        (void**)(&workspace_buffer_), workspace_layout_));
   }
 
   // Try to share from the output: this allows us to avoid unnecessary copy
   // operations, if the output is already allocated and is having the same
   // layout as the buffer has.
-  bool shared = buffer_.ShareFrom(*Y);
+  buffer_.ShareFrom(*Y);
   resources_[dnnResourceSrc] = X.buffer();
   resources_[dnnResourceDst] = buffer_.buffer();
-  resources_[dnnResourceWorkspace] = workspace_buffer_->buffer();
+  resources_[dnnResourceWorkspace] = workspace_buffer_;
   MKLDNN_SAFE_CALL(mkl::dnnExecute<float>(primitive_, resources_));
   buffer_.CopyTo(Y, primitive_, dnnResourceDst);
-  if (FLAGS_caffe2_mkl_memonger_in_use && !shared) {
-    buffer_.Reset();
-  }
   return true;
 }
 

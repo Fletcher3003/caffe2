@@ -21,8 +21,7 @@ except ImportError:
     HTTPError = urllib.HTTPError
     URLError = urllib.URLError
 
-# urllib requires more work to deal with a redirect, so not using vanity url
-DOWNLOAD_BASE_URL = "https://s3.amazonaws.com/download.caffe2.ai/models/"
+DOWNLOAD_BASE_URL = "https://s3.amazonaws.com/caffe2/models/"
 DOWNLOAD_COLUMNS = 70
 
 
@@ -51,25 +50,23 @@ def progressBar(percentage):
     sys.stdout.flush()
 
 
-def downloadFromURLToFile(url, filename, show_progress=True):
+def downloadFromURLToFile(url, filename):
     try:
         print("Downloading from {url}".format(url=url))
         response = urllib.urlopen(url)
-        size = int(response.info().get('Content-Length').strip())
+        size = int(response.info().getheader('Content-Length').strip())
+        downloaded_size = 0
         chunk = min(size, 8192)
         print("Writing to {filename}".format(filename=filename))
-        if show_progress:
-            downloaded_size = 0
-            progressBar(0)
+        progressBar(0)
         with open(filename, "wb") as local_file:
             while True:
                 data_chunk = response.read(chunk)
                 if not data_chunk:
                     break
                 local_file.write(data_chunk)
-                if show_progress:
-                    downloaded_size += len(data_chunk)
-                    progressBar(int(100 * downloaded_size / size))
+                downloaded_size += len(data_chunk)
+                progressBar(int(100 * downloaded_size / size))
         print("")  # New line to fix for progress bar
     except HTTPError as e:
         raise Exception("Could not download model. [HTTP Error] {code}: {reason}."
@@ -139,7 +136,7 @@ def validModelName(name):
     invalid_names = ['__init__']
     if name in invalid_names:
         return False
-    if not re.match("^[/0-9a-zA-Z_-]+$", name):
+    if not re.match("^[a-zA-Z_]+$", name):
         return False
     return True
 
@@ -158,4 +155,4 @@ if __name__ == "__main__":
         if validModelName(model):
             downloadModel(model, args)
         else:
-            print("'{}' is not a valid model name.".format(model))
+            print("'{model}' is not a valid model name.".format(model))

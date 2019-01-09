@@ -30,8 +30,7 @@ and output blobs.
         0,
         "output",
         "The exponential of the input tensor computed "
-        "element-wise")
-    .InheritOnnxSchema("Exp");
+        "element-wise");
 
 class GetExpGradient : public GradientMakerBase {
   using GradientMakerBase::GradientMakerBase;

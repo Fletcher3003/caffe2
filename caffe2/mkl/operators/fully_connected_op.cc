@@ -26,7 +26,7 @@ class MKLFullyConnectedOp final : public MKLOperator<T> {
 
     bool dims_changed;
     CHECK_INPUT_FILTER_DIMS(X, filter, dims_changed);
-    if (dims_changed || FLAGS_caffe2_mkl_memonger_in_use) {
+    if (dims_changed) {
       const int N = filter.dim32(0);
       CAFFE_ENFORCE(N == bias.dim32(0));
 
@@ -39,7 +39,6 @@ class MKLFullyConnectedOp final : public MKLOperator<T> {
         inputSizes[0] = X.dim32(1);
         inputSizes[1] = X.dim32(0);
       } else {
-        CAFFE_ENFORCE(X.ndim(), 4);
         inputSizes[0] = X.dim32(3);
         inputSizes[1] = X.dim32(2);
         inputSizes[2] = X.dim32(1);
@@ -65,7 +64,7 @@ class MKLFullyConnectedOp final : public MKLOperator<T> {
     // Try to share from the output: this allows us to avoid unnecessary copy
     // operations, if the output is already allocated and is having the same
     // layout as the buffer has.
-    bool shared = buffer_.ShareFrom(*Y);
+    buffer_.ShareFrom(*Y);
 
     std::shared_ptr<void> X_view =
         X.View(input_layout_, primitive_, dnnResourceSrc);
@@ -80,9 +79,6 @@ class MKLFullyConnectedOp final : public MKLOperator<T> {
 
     MKLDNN_SAFE_CALL(mkl::dnnExecute<T>(primitive_, resources_));
     buffer_.CopyTo(Y, primitive_, dnnResourceDst);
-    if (FLAGS_caffe2_mkl_memonger_in_use && !shared) {
-      buffer_.Reset();
-    }
     return true;
   }
 

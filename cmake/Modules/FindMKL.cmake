@@ -14,14 +14,9 @@
 
 
 # ---[ Options
-include(CMakeDependentOption)
-option(MKL_USE_SINGLE_DYNAMIC_LIBRARY "Use single dynamic library interface" ON)
-cmake_dependent_option(
-    MKL_USE_STATIC_LIBS "Use static libraries" OFF
-        "NOT MKL_USE_SINGLE_DYNAMIC_LIBRARY" OFF)
-cmake_dependent_option(
-    MKL_MULTI_THREADED  "Use multi-threading" ON
-    "NOT MKL_USE_SINGLE_DYNAMIC_LIBRARY" OFF)
+caffe_option(MKL_USE_SINGLE_DYNAMIC_LIBRARY "Use single dynamic library interface" ON)
+caffe_option(MKL_USE_STATIC_LIBS "Use static libraries" OFF IF NOT MKL_USE_SINGLE_DYNAMIC_LIBRARY)
+caffe_option(MKL_MULTI_THREADED  "Use multi-threading"   ON IF NOT MKL_USE_SINGLE_DYNAMIC_LIBRARY)
 
 # ---[ Root folders
 if(MSVC)
@@ -52,10 +47,10 @@ else()
     if(WIN32)
       list(APPEND __mkl_libs intel_c)
     else()
-      list(APPEND __mkl_libs intel)
+      list(APPEND __mkl_libs intel gf)
     endif()
   else()
-    list(APPEND __mkl_libs intel_lp64)
+    list(APPEND __mkl_libs intel_lp64 gf_lp64)
   endif()
 
   if(MKL_MULTI_THREADED)

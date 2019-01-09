@@ -35,10 +35,10 @@ def CurrentDeviceScope():
 @contextlib.contextmanager
 def NameScope(prefix, reset=False):
     global _threadlocal_scope
-    assert isinstance(prefix, basestring) or prefix is None, \
+    assert isinstance(prefix, basestring), \
         "NameScope takes in a string as its argument."
     old_scope = CurrentNameScope()
-    prefix = prefix + _NAMESCOPE_SEPARATOR if prefix else ''
+    prefix = prefix + _NAMESCOPE_SEPARATOR if prefix is not '' else ''
     if reset:
         _threadlocal_scope.namescope = prefix
     else:
@@ -53,47 +53,15 @@ def NameScope(prefix, reset=False):
 
 
 @contextlib.contextmanager
-def DeviceScope(scope, node_name=None):
-    new_scope = caffe2_pb2.DeviceOption()
-    if scope:
-        assert isinstance(scope, caffe2_pb2.DeviceOption), \
-            "DeviceScope takes in a caffe2_pb2.DeviceOption as its argument."
-        new_scope.CopyFrom(scope)
-    else:
-        assert node_name, "At least one argument should be non-null in DeviceScope"
-
-    # rewrite node_name if it is explicitly given
-    if node_name:
-        new_scope.node_name = node_name
+def DeviceScope(scope):
+    assert isinstance(scope, caffe2_pb2.DeviceOption), \
+        "DeviceScope takes in a caffe2_pb2.DeviceOption as its argument."
     global _threadlocal_scope
     old_scope = CurrentDeviceScope()
-    # nested scope should inherit the node_name if it is not explicitly set
-    if old_scope and old_scope.HasField('node_name') and \
-            not new_scope.HasField('node_name'):
-        new_scope.node_name = old_scope.node_name
-    _threadlocal_scope.devicescope = new_scope
+    _threadlocal_scope.devicescope = scope
     try:
         yield
     finally:
-        assert _threadlocal_scope.devicescope == new_scope, \
+        assert _threadlocal_scope.devicescope == scope, \
             "The device scope is changed from outside DeviceScope() calls."
         _threadlocal_scope.devicescope = old_scope
-
-
-@contextlib.contextmanager
-def EmptyDeviceScope():
-    """
-    Allow users to 'disable' the device scope behaviour (so it can be
-    controlled at a NetDef::DeviceOption level, not overridden at
-    OperatorDef::DeviceOption level).
-
-    This sets the CurrentDeviceScope() to None, so that the field is
-    not set in CreateOperator(...), etc.
-    """
-    old_scope = CurrentDeviceScope()
-    try:
-        _threadlocal_scope.devicescope = None
-        yield
-    finally:
-        _threadlocal_scope.devicescope = old_scope
-        return

@@ -6,7 +6,7 @@ from __future__ import unicode_literals
 import unittest
 from caffe2.python import brew, model_helper, workspace
 from caffe2.python.modeling.initializers import (
-        Initializer, PseudoFP16Initializer)
+        Initializer, pFP16Initializer)
 
 
 class InitializerTest(unittest.TestCase):
@@ -37,15 +37,15 @@ class InitializerTest(unittest.TestCase):
         data = model.net.AddExternalInput("data")
         fc1 = brew.fc(model, data, "fc1", dim_in=1, dim_out=1)
 
-        # default operator, PseudoFP16Initializer
+        # default operator, pFP16Initializer
         fc2 = brew.fc(model, fc1, "fc2", dim_in=1, dim_out=1,
-                      WeightInitializer=PseudoFP16Initializer
+                      WeightInitializer=pFP16Initializer
         )
 
-        # specified operator, PseudoFP16Initializer
+        # specified operator, pFP16Initializer
         fc3 = brew.fc(model, fc2, "fc3", dim_in=1, dim_out=1,
                       weight_init=("ConstantFill", {}),
-                      WeightInitializer=PseudoFP16Initializer
+                      WeightInitializer=pFP16Initializer
         )
 
     def test_fc_external_initializer(self):

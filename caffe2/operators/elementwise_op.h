@@ -8,14 +8,11 @@
 #include "caffe2/core/tensor.h"
 #include "caffe2/utils/math.h"
 
-#include <tuple>
-
 namespace caffe2 {
 
 using NumericTypes = TensorTypes<int32_t, int64_t, float, double>;
 using IntTypes = TensorTypes<int32_t, int64_t>;
 using BoolTypes = TensorTypes<bool>;
-using IntBoolTypes = TensorTypes<int32_t, int64_t, bool>; // discrete types
 
 struct SameTypeAsInput {
   template <typename T>
@@ -92,48 +89,6 @@ using UnaryElementwiseOp = UnaryElementwiseWithArgsOp<
     WithDefaultConstructor<Functor>,
     OutputType>;
 
-template <typename Context>
-std::tuple<size_t, size_t, size_t> calculate_broadcast_sizes(
-    const Tensor<Context>& A,
-    const Tensor<Context>& B,
-    int axis) {
-  CAFFE_ENFORCE_GE(
-      A.ndim(),
-      B.ndim(),
-      "If you are doing broadcasting, input1 should have "
-      "a smaller or equal number of dimensions.");
-  if (axis == -1) {
-    axis = A.ndim() - B.ndim();
-  }
-  CAFFE_ENFORCE(
-      axis >= 0 && axis <= A.ndim() - B.ndim(),
-      "Broadcast axis should be in the range of"
-      "[0, A.ndim() - B.ndim()], but axis = ",
-      axis);
-
-  int b_dim_start = 0;
-  while (b_dim_start < B.ndim() && B.dim(b_dim_start) == 1) {
-    ++b_dim_start;
-  }
-  int b_dim_end = B.ndim() - 1;
-  while (b_dim_end >= b_dim_start && B.dim(b_dim_end) == 1) {
-    --b_dim_end;
-  }
-  size_t pre = 1, n = 1, post = 1;
-  for (int i = 0; i < axis + b_dim_start; ++i) {
-    pre *= A.dim(i);
-  }
-  for (int i = b_dim_start; i <= b_dim_end; ++i) {
-    CAFFE_ENFORCE_EQ(
-        A.dim(i + axis), B.dim(i), "Broadcast dimension mismatch.");
-    n *= B.dim(i);
-  }
-  for (int i = axis + b_dim_end + 1; i < A.ndim(); ++i) {
-    post *= A.dim(i);
-  }
-  return std::make_tuple(pre, n, post);
-}
-
 /**
  * Performs a binary operation (e.g. +, - or /) with optional broadcast support.
  *
@@ -143,13 +98,9 @@ std::tuple<size_t, size_t, size_t> calculate_broadcast_sizes(
  *
  * If AllowBroadcast=true it support limited broadcasting of the right-hand-side
  * argument to match the shape of left-hand-side argument. Only suffix matching
- * is supported for now (1-dim expansion is allowed on both ends). E.g. this
- * will be accepted:
- * A dims: 2 3 4 5 6
- * B dims:   1 4 1
- *           ^
- *           |
- *          axis = 1
+ * is supported for now, 1-dim expansion doesn't work yet. More precisely
+ * tensors A and B can be operated on iff
+ *   `shape(A)[-len(shape(B)):] == * shape(B)`
  */
 template <
     typename InputTypes,
@@ -222,8 +173,28 @@ class BinaryElementwiseOp : public Operator<Context> {
     } else if (B.size() == 1) {
       functor_.template Run<true>(A.size(), Adata, Bdata, Cdata, &context_);
     } else {
-      size_t pre, n, post;
-      std::tie(pre, n, post) = calculate_broadcast_sizes(A, B, axis_);
+      CAFFE_ENFORCE_GT(
+          A.ndim(),
+          B.ndim(),
+          "If you are doing broadcasting, input1 should have "
+          "a smaller number of dimensions.");
+      const int axis = (axis_ == -1 ? A.ndim() - B.ndim() : axis_);
+      CAFFE_ENFORCE(
+          axis >= 0 && axis < A.ndim(),
+          "Broadcast axis should be in the range of the number "
+          "of dimensions of the first input.");
+      size_t pre = 1, n = 1, post = 1;
+      for (int i = 0; i < axis; ++i) {
+        pre *= A.dim(i);
+      }
+      for (int i = 0; i < B.ndim(); ++i) {
+        CAFFE_ENFORCE_EQ(
+            A.dim(i + axis), B.dim(i), "Broadcast dimension mismatch.");
+        n *= B.dim(i);
+      }
+      for (int i = axis + B.ndim(); i < A.ndim(); ++i) {
+        post *= A.dim(i);
+      }
       if (post == 1) {
         functor_.RunWithBroadcast(Adata, Bdata, Cdata, pre, n, &context_);
       } else {
@@ -362,7 +333,8 @@ bool DivGradientOp<Context>::RunOnDevice() {
   auto& dZ = Input(2);
   auto* dX = Output(0);
   auto* dY = Output(1);
-
+  CAFFE_ENFORCE_GT(Y.size(), 0);
+  CAFFE_ENFORCE_GT(Z.size(), 0);
   dX->ResizeLike(Y);
   dY->ResizeLike(Y);
 

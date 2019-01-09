@@ -60,10 +60,6 @@ def is_sandcastle():
     return False
 
 
-def is_travis():
-    return 'TRAVIS' in os.environ
-
-
 hypothesis.settings.register_profile(
     "sandcastle",
     hypothesis.settings(
@@ -118,25 +114,12 @@ def elements_of_type(dtype=np.float32, filter_=None):
 def arrays(dims, dtype=np.float32, elements=None):
     if elements is None:
         elements = elements_of_type(dtype)
-    return hypothesis.extra.numpy.arrays(
-        dtype,
-        dims,
-        elements=elements,
-    )
+    return hypothesis.extra.numpy.arrays(dtype, dims, elements=elements)
 
 
-def tensor(min_dim=1,
-           max_dim=4,
-           dtype=np.float32,
-           elements=None,
-           **kwargs):
+def tensor(min_dim=1, max_dim=4, dtype=np.float32, elements=None, **kwargs):
     dims_ = st.lists(dims(**kwargs), min_size=min_dim, max_size=max_dim)
-    return dims_.flatmap(
-        lambda dims: arrays(dims, dtype, elements))
-
-
-def tensor1d(min_len=1, max_len=64, dtype=np.float32, elements=None):
-    return tensor(1, 1, dtype, elements, min_value=min_len, max_value=max_len)
+    return dims_.flatmap(lambda dims: arrays(dims, dtype, elements))
 
 
 def segment_ids(size, is_sorted):
@@ -237,16 +220,8 @@ def sparse_lengths_tensor(**kwargs):
 def tensors(n, min_dim=1, max_dim=4, dtype=np.float32, elements=None, **kwargs):
     dims_ = st.lists(dims(**kwargs), min_size=min_dim, max_size=max_dim)
     return dims_.flatmap(
-        lambda dims: st.lists(
-            arrays(dims, dtype, elements),
-            min_size=n,
-            max_size=n))
-
-
-def tensors1d(n, min_len=1, max_len=64, dtype=np.float32, elements=None):
-    return tensors(
-        n, 1, 1, dtype, elements, min_value=min_len, max_value=max_len
-    )
+        lambda dims: st.lists(arrays(dims, dtype, elements),
+                              min_size=n, max_size=n))
 
 
 cpu_do = caffe2_pb2.DeviceOption()
@@ -434,8 +409,9 @@ class HypothesisTestCase(test_util.TestCase):
                     ref_vals,
                     atol=threshold,
                     rtol=threshold,
-                    err_msg='Gradient {0} (x) is not matching the reference (y)'
-                    .format(val_name),
+                    err_msg='Gradient {0} is not matching the reference'.format(
+                        val_name,
+                    ),
                 )
                 if ref_indices is not None:
                     indices = workspace.FetchBlob(str(grad_names.indices))
@@ -526,16 +502,13 @@ class HypothesisTestCase(test_util.TestCase):
         op.device_option.CopyFrom(device_option)
 
         with temp_workspace():
-            if (len(op.input) > len(inputs)):
-                raise ValueError(
-                    'must supply an input for each input on the op: %s vs %s' %
-                    (op.input, inputs))
             for (n, b) in zip(op.input, inputs):
                 workspace.FeedBlob(
                     n,
                     b,
                     device_option=input_device_options.get(n, device_option)
                 )
+                print("Input", n, input_device_options.get(n, device_option))
             net = core.Net("opnet")
             net.Proto().op.extend([op])
             test_shape_inference = False

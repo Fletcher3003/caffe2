@@ -56,15 +56,12 @@ class BlobsQueue : public std::enable_shared_from_this<BlobsQueue> {
   int64_t reader_{0};
   int64_t writer_{0};
   std::vector<std::vector<Blob*>> queue_;
-  const std::string name_;
 
   struct QueueStats {
     CAFFE_STAT_CTOR(QueueStats);
     CAFFE_EXPORTED_STAT(queue_balance);
     CAFFE_EXPORTED_STAT(queue_dequeued_records);
     CAFFE_DETAILED_EXPORTED_STAT(queue_dequeued_bytes);
-    CAFFE_AVG_EXPORTED_STAT(read_time_ns);
-    CAFFE_AVG_EXPORTED_STAT(write_time_ns);
   } stats_;
 };
 } // namespace caffe2

@@ -10,17 +10,11 @@ import hypothesis.strategies as st
 import numpy as np
 import unittest
 
-if workspace.is_asan:
-    # Numba seems to be not compatible with ASAN (at least at Facebook)
-    # so if we are in asan mode, we disable Numba which further disables
-    # the numba python op test.
+try:
+    import numba
+    HAS_NUMBA = True
+except ImportError:
     HAS_NUMBA = False
-else:
-    try:
-        import numba
-        HAS_NUMBA = True
-    except ImportError:
-        HAS_NUMBA = False
 
 
 class PythonOpTest(hu.HypothesisTestCase):
@@ -50,7 +44,6 @@ class PythonOpTest(hu.HypothesisTestCase):
         for i in range(n):
             y = workspace.FetchBlob(str(i))
             np.testing.assert_almost_equal(x, y)
-
 
 if __name__ == "__main__":
     import unittest

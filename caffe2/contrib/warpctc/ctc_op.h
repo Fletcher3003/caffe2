@@ -35,12 +35,7 @@ class CTCOp final : public Operator<Context> {
  public:
   USE_OPERATOR_CONTEXT_FUNCTIONS;
   CTCOp(const OperatorDef& operator_def, Workspace* ws)
-      : Operator<Context>(operator_def, ws),
-        is_test_(
-            OperatorBase::GetSingleArgument<int>(OpSchema::Arg_IsTest, 0)) {
-    CAFFE_ENFORCE(
-        (is_test_ && OutputSize() == 2) || (!is_test_ && OutputSize() == 3));
-  }
+      : Operator<Context>(operator_def, ws) {}
 
   bool RunOnDevice() override {
     // inputs
@@ -54,22 +49,11 @@ class CTCOp final : public Operator<Context> {
         OperatorBase::template Input<TensorCPU>(INPUT_LENGTHS);
 
     // outputs
-    Tensor<Context>* gradients = nullptr;
-    TensorCPU* costs;
-    Tensor<Context>* workspace;
-    if (!is_test_) {
-      // [grads, costs, workspace] to maintain backward compatibility
-      gradients = Output(0);
-      gradients->ResizeLike(inputs);
-      costs = OperatorBase::template Output<TensorCPU>(1);
-      costs->ResizeLike(labelLengths);
-      workspace = Output(2);
-    } else {
-      // [costs, workspace]
-      costs = OperatorBase::template Output<TensorCPU>(0);
-      costs->ResizeLike(labelLengths);
-      workspace = Output(1);
-    }
+    auto* costs = OperatorBase::template Output<TensorCPU>(COSTS);
+    costs->ResizeLike(labelLengths);
+    auto* gradients = Output(GRADIENTS);
+    gradients->ResizeLike(inputs);
+    auto* workspace = Output(WORKSPACE);
 
     size_t workspaceSizeBytes;
     CTC_CHECK(get_workspace_size(
@@ -82,7 +66,7 @@ class CTCOp final : public Operator<Context> {
     workspace->Resize(workspaceSizeBytes);
     CTC_CHECK(compute_ctc_loss(
         inputs.template data<T>(),
-        gradients ? gradients->template mutable_data<T>() : nullptr,
+        gradients->template mutable_data<T>(),
         labels.template data<int>(),
         labelLengths.template data<int>(),
         inputLengths.template data<int>(),
@@ -95,9 +79,8 @@ class CTCOp final : public Operator<Context> {
   }
 
 private:
- bool is_test_;
-
- INPUT_TAGS(INPUTS, LABELS, LABEL_LENGTHS, INPUT_LENGTHS);
+  INPUT_TAGS(INPUTS, LABELS, LABEL_LENGTHS, INPUT_LENGTHS);
+  OUTPUT_TAGS(GRADIENTS, COSTS, WORKSPACE);
 };
 }
 

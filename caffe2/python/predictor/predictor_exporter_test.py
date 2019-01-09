@@ -12,24 +12,7 @@ from future.utils import viewitems
 from caffe2.python.predictor_constants import predictor_constants as pc
 import caffe2.python.predictor.predictor_exporter as pe
 import caffe2.python.predictor.predictor_py_utils as pred_utils
-from caffe2.proto import caffe2_pb2, metanet_pb2
-
-
-class MetaNetDefTest(unittest.TestCase):
-    def test_minimal(self):
-        '''
-        Tests that a NetsMap message can be created with a NetDef message
-        '''
-        # This calls the constructor for a metanet_pb2.NetsMap
-        metanet_pb2.NetsMap(key="test_key", value=caffe2_pb2.NetDef())
-
-    def test_adding_net(self):
-        '''
-        Tests that NetDefs can be added to MetaNetDefs
-        '''
-        meta_net_def = metanet_pb2.MetaNetDef()
-        net_def = caffe2_pb2.NetDef()
-        meta_net_def.nets.add(key="test_key", value=net_def)
+from caffe2.proto import caffe2_pb2
 
 class PredictorExporterTest(unittest.TestCase):
     def _create_model(self):
@@ -71,28 +54,6 @@ class PredictorExporterTest(unittest.TestCase):
             outputs=["y"],
             shapes={"y": (1, 10), "data": (1, 5)},
         )
-
-    def test_param_intersection(self):
-        '''
-        Test that passes intersecting parameters and input/output blobs
-        '''
-        m = self._create_model()
-        with self.assertRaises(Exception):
-            pe.PredictorExportMeta(
-                predict_net=m.net,
-                parameters=m.params,
-                inputs=["data"] + m.params,
-                outputs=["y"],
-                shapes={"y": (1, 10), "data": (1, 5)},
-            )
-        with self.assertRaises(Exception):
-            pe.PredictorExportMeta(
-                predict_net=m.net,
-                parameters=m.params,
-                inputs=["data"],
-                outputs=["y"] + m.params,
-                shapes={"y": (1, 10), "data": (1, 5)},
-            )
 
     def test_meta_net_def_net_runs(self):
         for param, value in viewitems(self.params):

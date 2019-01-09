@@ -2,6 +2,7 @@
 #include "caffe2/utils/threadpool/pthreadpool_impl.h"
 #include "caffe2/utils/threadpool/ThreadPool.h"
 
+#if CAFFE2_THREADPOOL_MOBILE
 
 //
 // External API
@@ -21,3 +22,5 @@ void pthreadpool_compute_1d(struct pthreadpool* threadpool,
 size_t pthreadpool_get_threads_count(struct pthreadpool* threadpool) {
   return threadpool->pool_->getNumThreads();
 }
+
+#endif // CAFFE2_THREADPOOL_MOBILE

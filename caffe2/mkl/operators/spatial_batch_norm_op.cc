@@ -19,7 +19,12 @@ class MKLBNOp final : public SpatialBNOp<MKLContext> {
         operator_def.input(0) != operator_def.output(0),
         "Inplace BN not supported");
   }
-
+  ~MKLBNOp() {
+    if (scale_bias_buffer_ != NULL) {
+      dnnReleaseBuffer<T>(scale_bias_buffer_);
+      scale_bias_buffer_ = NULL;
+    }
+  }
   bool RunOnDevice() {
     auto& X = OperatorBase::Input<MKLMemory<float>>(INPUT);
     auto& scale = OperatorBase::Input<MKLMemory<float>>(SCALE);
@@ -50,7 +55,7 @@ class MKLBNOp final : public SpatialBNOp<MKLContext> {
 
     bool dims_changed;
     CHECK_INPUT_DIMS(X, dims_changed);
-    if (dims_changed || FLAGS_caffe2_mkl_memonger_in_use) {
+    if (dims_changed) {
       // Create main primitive.
       if (is_test_) {
         primitive_.Reset(
@@ -80,25 +85,25 @@ class MKLBNOp final : public SpatialBNOp<MKLContext> {
       buffer_.Reset(X.dims(), primitive_, dnnResourceDst, true);
 
       scale_bias_layout_.Reset(primitive_, dnnResourceScaleShift);
-      scale_bias_buffer_ =
-          caffe2::make_unique<MKLWorkspace<float>>(scale_bias_layout_);
+      MKLDNN_SAFE_CALL(mkl::dnnAllocateBuffer<float>(
+          (void**)(&scale_bias_buffer_), scale_bias_layout_));
 
       // fill scale and bias into a single buffer
       scale_buf = (T*)scale.buffer();
       bias_buf = (T*)bias.buffer();
       for (int i = 0; i < C; i++) {
-        scale_bias_buffer_->buffer()[i] = scale_buf[i];
-        scale_bias_buffer_->buffer()[C + i] = bias_buf[i];
+        scale_bias_buffer_[i] = scale_buf[i];
+        scale_bias_buffer_[C + i] = bias_buf[i];
       }
     }
 
     // Try to share from the output: this allows us to avoid unnecessary copy
     // operations, if the output is already allocated and is having the same
     // layout as the buffer has.
-    bool shared = buffer_.ShareFrom(*Y);
+    buffer_.ShareFrom(*Y);
     resources_[dnnResourceSrc] = X.buffer();
     resources_[dnnResourceDst] = buffer_.buffer();
-    resources_[dnnResourceScaleShift] = scale_bias_buffer_->buffer();
+    resources_[dnnResourceScaleShift] = scale_bias_buffer_;
 
     if (is_test_) {
       auto& est_mean = OperatorBase::Input<MKLMemory<float>>(EST_MEAN);
@@ -127,9 +132,6 @@ class MKLBNOp final : public SpatialBNOp<MKLContext> {
       }
     }
     buffer_.CopyTo(Y, primitive_, dnnResourceDst);
-    if (FLAGS_caffe2_mkl_memonger_in_use && !shared) {
-      buffer_.Reset();
-    }
     return true;
   }
 
@@ -140,7 +142,7 @@ class MKLBNOp final : public SpatialBNOp<MKLContext> {
   LayoutWrapper<T> saved_var_layout_;
   LayoutWrapper<T> running_mean_layout_;
   LayoutWrapper<T> running_var_layout_;
-  std::unique_ptr<MKLWorkspace<T>> scale_bias_buffer_;
+  T* scale_bias_buffer_ = nullptr;
   T* scale_buf = nullptr;
   T* bias_buf = nullptr;
   T* saved_mean_buf = nullptr;

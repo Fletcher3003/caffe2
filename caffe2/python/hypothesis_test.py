@@ -7,7 +7,7 @@ import copy
 import time
 from functools import partial, reduce
 from future.utils import viewitems, viewkeys
-from hypothesis import assume, given, settings, HealthCheck
+from hypothesis import assume, given, settings
 import hypothesis.strategies as st
 import unittest
 
@@ -165,15 +165,10 @@ class TestOperators(hu.HypothesisTestCase):
         self.assertReferenceChecks(gc, op, [X1, X2], elementwise_max)
 
     def test_add(self):
-        def not_overflow(x):
-            if not isinstance(x, float):
-                return abs(x) < (1 << 30) - 1
-            return True
-
         def ref(x, y):
             return (x + y, )
-        _test_binary("Add", ref, filter_=not_overflow, test_gradient=True)(self)
-        _test_binary_broadcast("Add", ref, filter_=not_overflow)(self)
+        _test_binary("Add", ref, test_gradient=True)(self)
+        _test_binary_broadcast("Add", ref)(self)
 
     def test_sub(self):
         def ref(x, y):
@@ -183,22 +178,17 @@ class TestOperators(hu.HypothesisTestCase):
         _test_binary_broadcast("Sub", ref)(self)
 
     def test_mul(self):
-        def not_overflow(x):
-            if not isinstance(x, float):
-                return abs(x) < (1 << 15) - 1
-            return True
-
         def ref(x, y):
             return (x * y, )
-        _test_binary("Mul", ref, filter_=not_overflow, test_gradient=True)(self)
-        _test_binary_broadcast("Mul", ref, filter_=not_overflow)(self)
+        _test_binary("Mul", ref, test_gradient=True)(self)
+        _test_binary_broadcast("Mul", ref)(self)
 
     def test_div(self):
         def ref(x, y):
             return (x / y, )
 
         def non_zero(x):
-            return abs(x) > 1e-2
+            return abs(x) > 10e-5
 
         def div_dtypes():
             return st.sampled_from([np.float32, np.float64])
@@ -446,7 +436,7 @@ class TestOperators(hu.HypothesisTestCase):
         self.assertReferenceChecks(gc, op, inputs, depth_concat_with_order)
 
     @given(X=hu.arrays(dims=[5, 2],
-                       elements=st.floats(min_value=1.0, max_value=10.0)),
+                       elements=st.floats(min_value=0.0, max_value=10.0)),
            **hu.gcs_cpu_only)
     def test_last_n_windows(self, X, gc, dc):
         workspace.FeedBlob('input', X)
@@ -1330,12 +1320,10 @@ class TestOperators(hu.HypothesisTestCase):
 
         # Create one consumer dequeue net and one consumer exist net
         consumer_net = core.Net('weight_sample_dequeue_net')
-        table_idx_blob = np.random.randint(low=-1, high=num_blobs, size=1)
         blobs = consumer_net.WeightedSampleDequeueBlobs(
             queues,
             num_blobs + 1,
-            weights=np.random.uniform(low=0.0, high=1.0, size=(num_queues,)),
-            table_idx_blob=table_idx_blob[0],
+            weights=np.random.uniform(low=0.0, high=1.0, size=(num_queues,))
         )
         status = blobs[-1]
         consumer_net.Python(append)(status)
@@ -1671,7 +1659,6 @@ class TestOperators(hu.HypothesisTestCase):
         self.assertEqual(iters.dtype, np.int64)
         self.assertEqual(iters[0], initial_iters + num_iters)
 
-
     @given(initial_iters=st.integers(0, 100),
            num_iters=st.integers(0, 100),
            num_nets=st.integers(0, 5))
@@ -1693,22 +1680,11 @@ class TestOperators(hu.HypothesisTestCase):
         plan = core.Plan("plan")
         plan.AddStep(concurrent_steps)
 
-        stats_net = core.Net("stats_net")
-        stats_net.StatRegistryExport([], ["stats_key", "stats_val", "stats_ts"])
-
         self.ws.run(init_net)
         self.ws.run(plan)
-        self.ws.run(stats_net)
         iters = self.ws.blobs[("iter")].fetch()
         self.assertEqual(iters.dtype, np.int64)
         self.assertEqual(iters[0], initial_iters + num_iters * num_nets)
-
-        if num_iters * num_nets > 0:
-            stats_key = self.ws.blobs[("stats_key")].fetch()
-            self.assertEqual(b'atomic_iter/stats/iter/num_iter', stats_key[0])
-            stat_val = self.ws.blobs[("stats_val")].fetch()
-            self.assertEqual(num_iters * num_nets, stat_val[0])
-
 
     @given(a=hu.tensor(),
            src=st.sampled_from(list(viewkeys(_NUMPY_TYPE_TO_ENUM))),
@@ -1738,32 +1714,19 @@ class TestOperators(hu.HypothesisTestCase):
 
     @given(a=hu.tensor(),
            eps=st.floats(min_value=1e-4, max_value=1e-2),
-           a_grad=hu.tensor(elements=st.floats(min_value=0.01, max_value=0.99)),
-           eps_grad=st.floats(min_value=1e-4, max_value=1e-3),
-           **hu.gcs)
-    def test_logit(self, a, eps, a_grad, eps_grad, gc, dc):
+           **hu.gcs_cpu_only)
+    def test_logit(self, a, eps, gc, dc):
         def ref(data):
             data = np.clip(data, eps, 1.0 - eps)
             return (np.log(data / (1 - data)), )
-        # forward testing carried out in the full range of input
-        # to ensure original test coverage.
-        # gradient test carried out with reduced input range
-        # because the sharp increase of the logit curve at 0 and 1
-        # error increases dramtically when input is close to 0 or 1
-        # and it will fail the test.
-        # So we only run gradient test in the range of (0.01, 0.99)
-        # very occationally, test may fail due to random accumulated error
-        # reduce test range to (0.02, 0.98) will improve test stability
+
         op = core.CreateOperator('Logit', ["X"], ["Y"], eps=eps)
         self.assertDeviceChecks(dc, op, [a], [0])
         self.assertReferenceChecks(gc, op, [a], ref)
-        op_grad = core.CreateOperator('Logit', ["X"], ["Y"], eps=eps_grad)
-        self.assertGradientChecks(gc, op_grad, [a_grad], 0, [0],
-                                  threshold=0.04, stepsize=2e-3)
 
     @given(a=hu.tensor(elements=st.floats(allow_nan=True)),
            value=st.floats(min_value=-10, max_value=10),
-           **hu.gcs)
+           **hu.gcs_cpu_only)
     def test_replace_nan(self, a, value, gc, dc):
         def ref(data):
             out = np.copy(data)
@@ -1889,8 +1852,8 @@ class TestOperators(hu.HypothesisTestCase):
             backward_link_external=backward_link_external,
             backward_link_offset=backward_link_offset,
             param=[inputs.index(p) for p in step_net.params],
-            step_net=step_net.Proto(),
-            backward_step_net=backward_step_net.Proto(),
+            step_net=str(step_net.Proto()),
+            backward_step_net=str(backward_step_net.Proto()),
             outputs_with_grads=[0],
         )
         workspace.FeedBlob(
@@ -1937,7 +1900,6 @@ class TestOperators(hu.HypothesisTestCase):
                 param,
                 [0])
 
-    @settings(suppress_health_check=[HealthCheck.filter_too_much])
     @given(n=st.integers(1, 5),
            c=st.integers(1, 5),
            h=st.integers(1, 5),
@@ -1954,7 +1916,6 @@ class TestOperators(hu.HypothesisTestCase):
         self.assertDeviceChecks(dc, op, [X], [0])
         self.assertGradientChecks(gc, op, [X], 0, [0])
 
-    @settings(suppress_health_check=[HealthCheck.filter_too_much])
     @given(n=st.integers(1, 5),
            c=st.integers(1, 5),
            h=st.integers(1, 5),
@@ -2167,19 +2128,11 @@ class TestOperators(hu.HypothesisTestCase):
 
     @given(inp=_dtypes().flatmap(lambda dt: _tensor_and_indices(
         elements=st.floats(min_value=0, max_value=1), dtype=dt)),
-        **hu.gcs)
+        **hu.gcs_cpu_only)
     def test_sparse_to_dense(self, inp, gc, dc):
         first_dim, X, I = inp
-        if X.dtype != np.dtype('float32') and gc.device_type == 1:
-            # Cuda only support 32 bit float
-            print("Bailout {}".format(X.dtype))
-            return
-        if gc.device_type == 1:
-            # Cuda version only support int32
-            I = I.astype(np.int32)
-
         # values don't matter
-        D = np.zeros((first_dim,) + X.shape[1:]).astype(X.dtype)
+        D = np.zeros((first_dim,) + X.shape[1:])
 
         op = core.CreateOperator("SparseToDense", ["I", "X", "D"], ["Y"])
 
@@ -2190,6 +2143,8 @@ class TestOperators(hu.HypothesisTestCase):
             return [O]
 
         self.assertReferenceChecks(gc, op, [I, X, D], sparse_to_dense)
+        self.assertDeviceChecks(dc, op, [I, X, D], [0])
+
         X = X.astype(np.float32)
         self.assertGradientChecks(gc, op, [I, X, D], 1, [0])
 

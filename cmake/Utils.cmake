@@ -1,21 +1,22 @@
 ################################################################################################
-# Exclude and prepend functionalities
-function (exclude OUTPUT INPUT)
-set(EXCLUDES ${ARGN})
-foreach(EXCLUDE ${EXCLUDES})
-        list(REMOVE_ITEM INPUT "${EXCLUDE}")
-endforeach()
-set(${OUTPUT} ${INPUT} PARENT_SCOPE)
-endfunction(exclude)
+# Command alias for debugging messages
+# Usage:
+#   dmsg(<message>)
+function(dmsg)
+  message(STATUS ${ARGN})
+endfunction()
 
-function (prepend OUTPUT PREPEND)
-set(OUT "")
-foreach(ITEM ${ARGN})
-        list(APPEND OUT "${PREPEND}${ITEM}")
-endforeach()
-set(${OUTPUT} ${OUT} PARENT_SCOPE)
-endfunction(prepend)
-
+################################################################################################
+# Removes duplicates from list(s)
+# Usage:
+#   caffe_list_unique(<list_variable> [<list_variable>] [...])
+macro(caffe_list_unique)
+  foreach(__lst ${ARGN})
+    if(${__lst})
+      list(REMOVE_DUPLICATES ${__lst})
+    endif()
+  endforeach()
+endmacro()
 
 ################################################################################################
 # Clears variables from list
@@ -28,6 +29,22 @@ macro(caffe_clear_vars)
 endmacro()
 
 ################################################################################################
+# Removes duplicates from string
+# Usage:
+#   caffe_string_unique(<string_variable>)
+function(caffe_string_unique __string)
+  if(${__string})
+    set(__list ${${__string}})
+    separate_arguments(__list)
+    list(REMOVE_DUPLICATES __list)
+    foreach(__e ${__list})
+      set(__str "${__str} ${__e}")
+    endforeach()
+    set(${__string} ${__str} PARENT_SCOPE)
+  endif()
+endfunction()
+
+################################################################################################
 # Prints list element per line
 # Usage:
 #   caffe_print_list(<list>)
@@ -35,6 +52,35 @@ function(caffe_print_list)
   foreach(e ${ARGN})
     message(STATUS ${e})
   endforeach()
+endfunction()
+
+################################################################################################
+# Function merging lists of compiler flags to single string.
+# Usage:
+#   caffe_merge_flag_lists(out_variable <list1> [<list2>] [<list3>] ...)
+function(caffe_merge_flag_lists out_var)
+  set(__result "")
+  foreach(__list ${ARGN})
+    foreach(__flag ${${__list}})
+      string(STRIP ${__flag} __flag)
+      set(__result "${__result} ${__flag}")
+    endforeach()
+  endforeach()
+  string(STRIP ${__result} __result)
+  set(${out_var} ${__result} PARENT_SCOPE)
+endfunction()
+
+################################################################################################
+# Converts all paths in list to absolute
+# Usage:
+#   caffe_convert_absolute_paths(<list_variable>)
+function(caffe_convert_absolute_paths variable)
+  set(__dlist "")
+  foreach(__s ${${variable}})
+    get_filename_component(__abspath ${__s} ABSOLUTE)
+    list(APPEND __list ${__abspath})
+  endforeach()
+  set(${variable} ${__list} PARENT_SCOPE)
 endfunction()
 
 ################################################################################################
@@ -113,6 +159,240 @@ function(caffe_parse_header_single_define LIBNAME HDR_PATH VARNAME)
   endif()
 endfunction()
 
+########################################################################################################
+# An option that the user can select. Can accept condition to control when option is available for user.
+# Usage:
+#   caffe_option(<option_variable> "doc string" <initial value or boolean expression> [IF <condition>])
+function(caffe_option variable description value)
+  set(__value ${value})
+  set(__condition "")
+  set(__varname "__value")
+  foreach(arg ${ARGN})
+    if(arg STREQUAL "IF" OR arg STREQUAL "if")
+      set(__varname "__condition")
+    else()
+      list(APPEND ${__varname} ${arg})
+    endif()
+  endforeach()
+  unset(__varname)
+  if("${__condition}" STREQUAL "")
+    set(__condition 2 GREATER 1)
+  endif()
+
+  if(${__condition})
+    if("${__value}" MATCHES ";")
+      if(${__value})
+        option(${variable} "${description}" ON)
+      else()
+        option(${variable} "${description}" OFF)
+      endif()
+    elseif(DEFINED ${__value})
+      if(${__value})
+        option(${variable} "${description}" ON)
+      else()
+        option(${variable} "${description}" OFF)
+      endif()
+    else()
+      option(${variable} "${description}" ${__value})
+    endif()
+  else()
+    unset(${variable} CACHE)
+  endif()
+endfunction()
+
+################################################################################################
+# Utility macro for comparing two lists. Used for CMake debugging purposes
+# Usage:
+#   caffe_compare_lists(<list_variable> <list2_variable> [description])
+function(caffe_compare_lists list1 list2 desc)
+  set(__list1 ${${list1}})
+  set(__list2 ${${list2}})
+  list(SORT __list1)
+  list(SORT __list2)
+  list(LENGTH __list1 __len1)
+  list(LENGTH __list2 __len2)
+
+  if(NOT ${__len1} EQUAL ${__len2})
+    message(FATAL_ERROR "Lists are not equal. ${__len1} != ${__len2}. ${desc}")
+  endif()
+
+  foreach(__i RANGE 1 ${__len1})
+    math(EXPR __index "${__i}- 1")
+    list(GET __list1 ${__index} __item1)
+    list(GET __list2 ${__index} __item2)
+    if(NOT ${__item1} STREQUAL ${__item2})
+      message(FATAL_ERROR "Lists are not equal. Differ at element ${__index}. ${desc}")
+    endif()
+  endforeach()
+endfunction()
+
+################################################################################################
+# Command for disabling warnings for different platforms (see below for gcc and VisualStudio)
+# Usage:
+#   caffe_warnings_disable(<CMAKE_[C|CXX]_FLAGS[_CONFIGURATION]> -Wshadow /wd4996 ..,)
+macro(caffe_warnings_disable)
+  set(_flag_vars "")
+  set(_msvc_warnings "")
+  set(_gxx_warnings "")
+
+  foreach(arg ${ARGN})
+    if(arg MATCHES "^CMAKE_")
+      list(APPEND _flag_vars ${arg})
+    elseif(arg MATCHES "^/wd")
+      list(APPEND _msvc_warnings ${arg})
+    elseif(arg MATCHES "^-W")
+      list(APPEND _gxx_warnings ${arg})
+    endif()
+  endforeach()
+
+  if(NOT _flag_vars)
+    set(_flag_vars CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
+  endif()
+
+  if(MSVC AND _msvc_warnings)
+    foreach(var ${_flag_vars})
+      foreach(warning ${_msvc_warnings})
+        set(${var} "${${var}} ${warning}")
+      endforeach()
+    endforeach()
+  elseif((CMAKE_COMPILER_IS_GNUCXX OR CMAKE_COMPILER_IS_CLANGXX) AND _gxx_warnings)
+    foreach(var ${_flag_vars})
+      foreach(warning ${_gxx_warnings})
+        if(NOT warning MATCHES "^-Wno-")
+          string(REPLACE "${warning}" "" ${var} "${${var}}")
+          string(REPLACE "-W" "-Wno-" warning "${warning}")
+        endif()
+        set(${var} "${${var}} ${warning}")
+      endforeach()
+    endforeach()
+  endif()
+  caffe_clear_vars(_flag_vars _msvc_warnings _gxx_warnings)
+endmacro()
+
+################################################################################################
+# Helper function get current definitions
+# Usage:
+#   caffe_get_current_definitions(<definitions_variable>)
+function(caffe_get_current_definitions definitions_var)
+  get_property(current_definitions DIRECTORY PROPERTY COMPILE_DEFINITIONS)
+  set(result "")
+
+  foreach(d ${current_definitions})
+    list(APPEND result -D${d})
+  endforeach()
+
+  caffe_list_unique(result)
+  set(${definitions_var} ${result} PARENT_SCOPE)
+endfunction()
+
+################################################################################################
+# Helper function get current includes/definitions
+# Usage:
+#   caffe_get_current_cflags(<cflagslist_variable>)
+function(caffe_get_current_cflags cflags_var)
+  get_property(current_includes DIRECTORY PROPERTY INCLUDE_DIRECTORIES)
+  caffe_convert_absolute_paths(current_includes)
+  caffe_get_current_definitions(cflags)
+
+  foreach(i ${current_includes})
+    list(APPEND cflags "-I${i}")
+  endforeach()
+
+  caffe_list_unique(cflags)
+  set(${cflags_var} ${cflags} PARENT_SCOPE)
+endfunction()
+
+################################################################################################
+# Helper function to parse current linker libs into link directories, libflags and osx frameworks
+# Usage:
+#   caffe_parse_linker_libs(<Caffe_LINKER_LIBS_var> <directories_var> <libflags_var> <frameworks_var>)
+function(caffe_parse_linker_libs Caffe_LINKER_LIBS_variable folders_var flags_var frameworks_var)
+
+  set(__unspec "")
+  set(__debug "")
+  set(__optimized "")
+  set(__framework "")
+  set(__varname "__unspec")
+
+  # split libs into debug, optimized, unspecified and frameworks
+  foreach(list_elem ${${Caffe_LINKER_LIBS_variable}})
+    if(list_elem STREQUAL "debug")
+      set(__varname "__debug")
+    elseif(list_elem STREQUAL "optimized")
+      set(__varname "__optimized")
+    elseif(list_elem MATCHES "^-framework[ \t]+([^ \t].*)")
+      list(APPEND __framework -framework ${CMAKE_MATCH_1})
+    else()
+      list(APPEND ${__varname} ${list_elem})
+      set(__varname "__unspec")
+    endif()
+  endforeach()
+
+  # attach debug or optimized libs to unspecified according to current configuration
+  if(CMAKE_BUILD_TYPE MATCHES "Debug")
+    set(__libs ${__unspec} ${__debug})
+  else()
+    set(__libs ${__unspec} ${__optimized})
+  endif()
+
+  set(libflags "")
+  set(folders "")
+
+  # convert linker libraries list to link flags
+  foreach(lib ${__libs})
+    if(TARGET ${lib})
+      list(APPEND folders $<TARGET_LINKER_FILE_DIR:${lib}>)
+      list(APPEND libflags -l${lib})
+    elseif(lib MATCHES "^-l.*")
+      list(APPEND libflags ${lib})
+    elseif(IS_ABSOLUTE ${lib})
+      get_filename_component(folder  ${lib} PATH)
+      get_filename_component(filename ${lib} NAME)
+      string(REGEX REPLACE "\\.[^.]*$" "" filename_without_shortest_ext ${filename})
+
+      string(REGEX MATCH "^lib(.*)" __match ${filename_without_shortest_ext})
+      list(APPEND libflags -l${CMAKE_MATCH_1})
+      list(APPEND folders    ${folder})
+    else()
+      message(FATAL_ERROR "Logic error. Need to update cmake script")
+    endif()
+  endforeach()
+
+  caffe_list_unique(libflags folders)
+
+  set(${folders_var} ${folders} PARENT_SCOPE)
+  set(${flags_var} ${libflags} PARENT_SCOPE)
+  set(${frameworks_var} ${__framework} PARENT_SCOPE)
+endfunction()
+
+################################################################################################
+# Helper function to detect Darwin version, i.e. 10.8, 10.9, 10.10, ....
+# Usage:
+#   caffe_detect_darwin_version(<version_variable>)
+function(caffe_detect_darwin_version output_var)
+  if(APPLE)
+    execute_process(COMMAND /usr/bin/sw_vers -productVersion
+                    RESULT_VARIABLE __sw_vers OUTPUT_VARIABLE __sw_vers_out
+                    ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+    set(${output_var} ${__sw_vers_out} PARENT_SCOPE)
+  else()
+    set(${output_var} "" PARENT_SCOPE)
+  endif()
+endfunction()
+
+function(caffe_add_whole_archive_flag lib output_var)
+  if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
+    set(${output_var} -Wl,-force_load,$<TARGET_FILE:${lib}> PARENT_SCOPE)
+  elseif(MSVC)
+    # In MSVC, we will add whole archive in default.
+    set(${output_var} -WHOLEARCHIVE:$<TARGET_FILE:${lib}> PARENT_SCOPE)
+  else()
+    # Assume everything else is like gcc
+    set(${output_var} -Wl,--whole-archive ${lib} -Wl,--no-whole-archive PARENT_SCOPE)
+  endif()
+endfunction()
+
 ##############################################################################
 # Helper function to automatically generate __init__.py files where python
 # sources reside but there are no __init__.py present.
@@ -144,76 +424,24 @@ function(caffe_autogen_init_py_files)
   endforeach()
 endfunction()
 
-###
-# Removes common indentation from a block of text to produce code suitable for
-# setting to `python -c`, or using with pycmd. This allows multiline code to be
-# nested nicely in the surrounding code structure.
-#
-# This function respsects PYTHON_EXECUTABLE if it defined, otherwise it uses
-# `python` and hopes for the best. An error will be thrown if it is not found.
-#
-# Args:
-#     outvar : variable that will hold the stdout of the python command
-#     text   : text to remove indentation from
-#
-function(dedent outvar text)
-  # Use PYTHON_EXECUTABLE if it is defined, otherwise default to python
-  if ("${PYTHON_EXECUTABLE}" STREQUAL "")
-    set(_python_exe "python")
+##############################################################################
+# Creating a Caffe2 binary target with sources specified with relative path.
+# Usage:
+#   caffe2_binary_target(target_name_or_src <src1> [<src2>] [<src3>] ...)
+# If only target_name_or_src is specified, this target is build with one single
+# source file and the target name is autogen from the filename. Otherwise, the
+# target name is given by the first argument and the rest are the source files
+# to build the target.
+function(caffe2_binary_target target_name_or_src)
+  if (${ARGN})
+    set(__target ${target_name_or_src})
+    prepend(__srcs "${CMAKE_CURRENT_SOURCE_DIR}/" "${ARGN}")
   else()
-    set(_python_exe "${PYTHON_EXECUTABLE}")
+    get_filename_component(__target ${target_name_or_src} NAME_WE)
+    prepend(__srcs "${CMAKE_CURRENT_SOURCE_DIR}/" "${target_name_or_src}")
   endif()
-  set(_fixup_cmd "import sys; from textwrap import dedent; print(dedent(sys.stdin.read()))")
-  # Use echo to pipe the text to python's stdinput. This prevents us from
-  # needing to worry about any sort of special escaping.
-  execute_process(
-    COMMAND echo "${text}"
-    COMMAND "${_python_exe}" -c "${_fixup_cmd}"
-    RESULT_VARIABLE _dedent_exitcode
-    OUTPUT_VARIABLE _dedent_text)
-  if(NOT ${_dedent_exitcode} EQUAL 0)
-    message(ERROR " Failed to remove indentation from: \n\"\"\"\n${text}\n\"\"\"
-    Python dedent failed with error code: ${_dedent_exitcode}")
-    message(FATAL_ERROR " Python dedent failed with error code: ${_dedent_exitcode}")
-  endif()
-  # Remove supurflous newlines (artifacts of print)
-  string(STRIP "${_dedent_text}" _dedent_text)
-  set(${outvar} "${_dedent_text}" PARENT_SCOPE)
-endfunction()
-
-
-###
-# Helper function to run `python -c "<cmd>"` and capture the results of stdout
-#
-# Runs a python command and populates an outvar with the result of stdout.
-# Common indentation in the text of `cmd` is removed before the command is
-# executed, so the caller does not need to worry about indentation issues.
-#
-# This function respsects PYTHON_EXECUTABLE if it defined, otherwise it uses
-# `python` and hopes for the best. An error will be thrown if it is not found.
-#
-# Args:
-#     outvar : variable that will hold the stdout of the python command
-#     cmd    : text representing a (possibly multiline) block of python code
-#
-function(pycmd outvar cmd)
-  dedent(_dedent_cmd "${cmd}")
-  # Use PYTHON_EXECUTABLE if it is defined, otherwise default to python
-  if ("${PYTHON_EXECUTABLE}" STREQUAL "")
-    set(_python_exe "python")
-  else()
-    set(_python_exe "${PYTHON_EXECUTABLE}")
-  endif()
-  # run the actual command
-  execute_process(
-    COMMAND "${_python_exe}" -c "${_dedent_cmd}"
-    RESULT_VARIABLE _exitcode
-    OUTPUT_VARIABLE _output)
-  if(NOT ${_exitcode} EQUAL 0)
-    message(ERROR " Failed when running python code: \"\"\"\n${_dedent_cmd}\n\"\"\"")
-    message(FATAL_ERROR " Python command failed with error code: ${_exitcode}")
-  endif()
-  # Remove supurflous newlines (artifacts of print)
-  string(STRIP "${_output}" _output)
-  set(${outvar} "${_output}" PARENT_SCOPE)
+  add_executable(${__target} ${__srcs})
+  add_dependencies(${__target} ${Caffe2_MAIN_LIBS_ORDER})
+  target_link_libraries(${__target} ${Caffe2_MAIN_LIBS} ${Caffe2_DEPENDENCY_LIBS})
+  install(TARGETS ${__target} DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 endfunction()

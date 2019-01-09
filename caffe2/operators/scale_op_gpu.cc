@@ -2,12 +2,5 @@
 #include "caffe2/operators/scale_op.h"
 
 namespace caffe2 {
-
-template <>
-bool ScaleOp<CUDAContext>::RunOnDevice() {
-  return DispatchHelper<TensorTypes<float16, float>>::call(this, Input(0));
-}
-
-REGISTER_CUDA_OPERATOR(Scale, ScaleOp<CUDAContext>);
-
+REGISTER_CUDA_OPERATOR(Scale, ScaleOp<float, CUDAContext>);
 }  // namespace caffe2

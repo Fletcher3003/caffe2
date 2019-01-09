@@ -27,7 +27,6 @@ from collections import OrderedDict, namedtuple
 from past.builtins import basestring
 from future.utils import viewitems, viewkeys, viewvalues
 from itertools import islice
-from six import StringIO
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -183,16 +182,6 @@ class Field(object):
             (self.field_metadata() == other.field_metadata())
         )
 
-    def _pprint_impl(self, indent, str_buffer):
-        raise NotImplementedError('Field is an abstrct class.')
-
-    def __repr__(self):
-        str_buffer = StringIO()
-        self._pprint_impl(0, str_buffer)
-        contents = str_buffer.getvalue()
-        str_buffer.close()
-        return contents
-
 
 class List(Field):
     """Represents a variable-length list.
@@ -241,13 +230,9 @@ class List(Field):
             _normalize_field(self.lengths, keep_blobs=keep_blobs)
         )
 
-    def _pprint_impl(self, indent, str_buffer):
-        str_buffer.write('  ' * indent + "List(\n")
-        str_buffer.write('  ' * (indent + 1) + "lengths=\n")
-        self.lengths._pprint_impl(indent=indent + 2, str_buffer=str_buffer)
-        str_buffer.write('  ' * (indent + 1) + "_items=\n")
-        self._items._pprint_impl(indent=indent + 2, str_buffer=str_buffer)
-        str_buffer.write('  ' * indent + ")\n")
+    def __repr__(self):
+        return "List(lengths={!r}, _items={!r})".format(
+            self.lengths, self._items)
 
     def __getattr__(self, item):
         """If the value of this list is a struct,
@@ -312,6 +297,8 @@ class Struct(Field):
         fields = [(name, _normalize_field(field)) for name, field in fields]
         self.fields = OrderedDict()
         for name, field in fields:
+            # if name == 'dense':
+            #     import pdb; pdb.set_trace()
             if FIELD_SEPARATOR in name:
                 name, field = self._struct_from_nested_name(name, field)
             if name not in self.fields:
@@ -399,12 +386,13 @@ class Struct(Field):
         except (KeyError, TypeError):
             return None
 
-    def _pprint_impl(self, indent, str_buffer):
-        str_buffer.write('  ' * indent + "Struct( \n")
-        for name, field in viewitems(self.fields):
-            str_buffer.write('  ' * (indent + 1) + "{}=".format(name) + "\n")
-            field._pprint_impl(indent=indent + 2, str_buffer=str_buffer)
-        str_buffer.write('  ' * indent + ") \n")
+    def __repr__(self):
+        return "Struct({})".format(
+            ', '.join(
+                "{}={!r}".format(name, field)
+               for name, field in viewitems(self.fields)
+            )
+        )
 
     def __contains__(self, item):
         field = self._get_field_by_nested_name(item)
@@ -437,15 +425,6 @@ class Struct(Field):
             if field is None:
                 raise KeyError('field "%s" not found' % (item))
             return field
-
-    def get(self, item, default_value):
-        """
-        similar to python's dictionary get method, return field of item if found
-        (i.e. self.item is valid) or otherwise return default_value
-
-        it's a syntax suger of python's builtin getattr method
-        """
-        return getattr(self, item, default_value)
 
     def __getattr__(self, item):
         if item.startswith('__'):
@@ -591,7 +570,7 @@ class Scalar(Field):
 
         Scalar(np.float64)
 
-            Scalar field of type float64. Caffe2 will expect readers and
+            Scalar field of type float32. Caffe2 will expect readers and
             datasets to expose it as a 1D tensor of doubles (vector), where
             the size of the vector is determined by this fields' domain.
 
@@ -766,10 +745,9 @@ class Scalar(Field):
             self.dtype = np.dtype(np.void)
         self._validate_metadata()
 
-    def _pprint_impl(self, indent, str_buffer):
-        str_buffer.write('  ' * (indent) +
-            'Scalar({!r}, {!r}, {!r})'.format(
-            self.dtype, self._blob, self._metadata) + "\n")
+    def __repr__(self):
+        return 'Scalar({!r}, {!r}, {!r})'.format(
+            self.dtype, self._blob, self._metadata)
 
     def id(self):
         """
@@ -1101,7 +1079,6 @@ def InitEmptyRecord(net, schema_or_record, enforce_types=False):
             shape = [0] + list(blob_type.shape)
             net.ConstantFill([], blob, shape=shape, dtype=data_type)
         except TypeError:
-            logger.warning("Blob {} has type error".format(blob))
             # If data_type_for_dtype doesn't know how to resolve given numpy
             # type to core.DataType, that function can throw type error (for
             # example that would happen for cases of unknown types such as
@@ -1119,7 +1096,6 @@ def InitEmptyRecord(net, schema_or_record, enforce_types=False):
 
 _DATA_TYPE_FOR_DTYPE = [
     (np.str, core.DataType.STRING),
-    (np.float16, core.DataType.FLOAT16),
     (np.float32, core.DataType.FLOAT),
     (np.float64, core.DataType.DOUBLE),
     (np.bool, core.DataType.BOOL),

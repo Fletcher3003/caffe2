@@ -375,25 +375,6 @@ class AveragePool {
       runNeonAveragePool4x4p0s0NCHW(N, C, inputH, inputW, input, output);
       return true;
     }
-#else
-    (void)N;
-    (void)C;
-    (void)inputH;
-    (void)inputW;
-    (void)outputH;
-    (void)outputW;
-    (void)kH;
-    (void)kW;
-    (void)strideH;
-    (void)strideW;
-    (void)padT;
-    (void)padL;
-    (void)padB;
-    (void)padR;
-    (void)dilationH;
-    (void)dilationW;
-    (void)input;
-    (void)output;
 #endif
     return false;
   }
@@ -467,25 +448,6 @@ class MaxPool {
       runNeonMaxPool2x2p0s0NCHW(N, C, inputH, inputW, input, output);
       return true;
     }
-#else
-    (void)N;
-    (void)C;
-    (void)inputH;
-    (void)inputW;
-    (void)outputH;
-    (void)outputW;
-    (void)kH;
-    (void)kW;
-    (void)strideH;
-    (void)strideW;
-    (void)padT;
-    (void)padL;
-    (void)padB;
-    (void)padR;
-    (void)dilationH;
-    (void)dilationW;
-    (void)input;
-    (void)output;
 #endif
     return false;
   }
@@ -727,69 +689,7 @@ bool PoolOp<T, Context, PoolType>::RunOnDeviceWithOrderNHWC() {
   }
   return true;
 }
-const char* kAveragePoolDoc = R"DOC(
-consumes an input blob X and applies average pooling across the
-the blob according to kernel sizes, stride sizes, and pad lengths defined by the
-ConvPoolOpBase operator. Average pooling consisting of averaging all values of a
-subset of the input tensor according to the kernel size and downsampling the
-data into the output blob Y for further processing.
-)DOC";
 
-const char* kMaxPoolDoc = R"DOC(
-consumes an input blob X and applies max pooling across the
-the blob according to kernel sizes, stride sizes, and pad lengths defined by the
-ConvPoolOpBase operator. Max pooling consisting of taking the maximum value of a
-subset of the input tensor according to the kernel size and downsampling the
-data into the output blob Y for further processing.
-)DOC";
-
-std::function<void(OpSchema&)> AveragePoolDocGenerator(const char* dim) {
-  return [=](OpSchema& schema) {
-    string doc = "AveragePool{dim} {pool_doc}";
-    ReplaceAll(doc, "{dim}", dim);
-    ReplaceAll(doc, "{pool_doc}", kAveragePoolDoc);
-    schema.SetDoc(doc);
-    schema.Input(
-        0,
-        "X",
-        "Input data tensor from the previous operator; dimensions depend on "
-        "whether the NCHW or NHWC operators are being used. For example, in "
-        "the former, the input has size (N x C x H x W), where N is the batch "
-        "size, C is the number of channels, and H and W are the height and the "
-        "width of the data. The corresponding permutation of dimensions is "
-        "used in the latter case.");
-    schema.Output(
-        0,
-        "Y",
-        "Output data tensor from average pooling across the input "
-        "tensor. Dimensions will vary based on various kernel, stride, and pad "
-        "sizes.");
-  };
-}
-
-std::function<void(OpSchema&)> MaxPoolDocGenerator(const char* dim) {
-  return [=](OpSchema& schema) {
-    string doc = "MaxPool{dim} {pool_doc}";
-    ReplaceAll(doc, "{dim}", dim);
-    ReplaceAll(doc, "{pool_doc}", kMaxPoolDoc);
-    schema.SetDoc(doc);
-    schema.Input(
-        0,
-        "X",
-        "Input data tensor from the previous operator; dimensions depend on "
-        "whether the NCHW or NHWC operators are being used. For example, in "
-        "the former, the input has size (N x C x H x W), where N is the batch "
-        "size, C is the number of channels, and H and W are the height and the "
-        "width of the data. The corresponding permutation of dimensions is "
-        "used in the latter case.");
-    schema.Output(
-        0,
-        "Y",
-        "Output data tensor from max pooling across the input "
-        "tensor. Dimensions will vary based on various kernel, stride, and pad "
-        "sizes.");
-  };
-}
 REGISTER_CPU_OPERATOR(
     AveragePool,
     PoolOp<float, CPUContext, AveragePool<float>>);
@@ -798,41 +698,28 @@ OPERATOR_SCHEMA(AveragePool)
     .NumInputs(1)
     .NumOutputs(1)
     .TensorInferenceFunction(ConvPoolOpBase<CPUContext>::TensorInferenceForPool)
-    .FillUsing(AveragePoolDocGenerator(""))
-    .InheritOnnxSchema("AveragePool");
-
-REGISTER_CPU_OPERATOR(
-    AveragePool1D,
-    PoolOp<float, CPUContext, AveragePool<float>>);
-
-OPERATOR_SCHEMA(AveragePool1D)
-    .NumInputs(1)
-    .NumOutputs(1)
-    .TensorInferenceFunction(ConvPoolOpBase<CPUContext>::TensorInferenceForPool)
-    .FillUsing(AveragePoolDocGenerator("1D"))
-    .InheritOnnxSchema("AveragePool");
-
-REGISTER_CPU_OPERATOR(
-    AveragePool2D,
-    PoolOp<float, CPUContext, AveragePool<float>>);
-
-OPERATOR_SCHEMA(AveragePool2D)
-    .NumInputs(1)
-    .NumOutputs(1)
-    .TensorInferenceFunction(ConvPoolOpBase<CPUContext>::TensorInferenceForPool)
-    .FillUsing(AveragePoolDocGenerator("2D"))
-    .InheritOnnxSchema("AveragePool");
-
-REGISTER_CPU_OPERATOR(
-    AveragePool3D,
-    PoolOp<float, CPUContext, AveragePool<float>>);
-
-OPERATOR_SCHEMA(AveragePool3D)
-    .NumInputs(1)
-    .NumOutputs(1)
-    .TensorInferenceFunction(ConvPoolOpBase<CPUContext>::TensorInferenceForPool)
-    .FillUsing(AveragePoolDocGenerator("3D"))
-    .InheritOnnxSchema("AveragePool");
+    .SetDoc(R"DOC(
+AveragePool consumes an input blob X and applies average pooling across the
+the blob according to kernel sizes, stride sizes, and pad lengths defined by the
+ConvPoolOpBase operator. Average pooling consisting of averaging all values of a
+subset of the input tensor according to the kernel size and downsampling the
+data into the output blob Y for further processing.
+  )DOC")
+    .Input(
+        0,
+        "X",
+        "Input data tensor from the previous operator; dimensions depend on "
+        "whether the NCHW or NHWC operators are being used. For example, in "
+        "the former, the input has size (N x C x H x W), where N is the batch "
+        "size, C is the number of channels, and H and W are the height and the "
+        "width of the data. The corresponding permutation of dimensions is "
+        "used in the latter case.")
+    .Output(
+        0,
+        "Y",
+        "Output data tensor from average pooling across the input "
+        "tensor. Dimensions will vary based on various kernel, stride, and pad "
+        "sizes.");
 
 REGISTER_CPU_OPERATOR(MaxPool, PoolOp<float, CPUContext, MaxPool<float>>);
 
@@ -840,33 +727,27 @@ OPERATOR_SCHEMA(MaxPool)
     .NumInputs(1)
     .NumOutputs(1)
     .TensorInferenceFunction(ConvPoolOpBase<CPUContext>::TensorInferenceForPool)
-    .FillUsing(MaxPoolDocGenerator(""))
-    .InheritOnnxSchema("MaxPool");
+    .SetDoc(R"DOC(
+MaxPool consumes an input blob X and applies max pooling across the
+the blob according to kernel sizes, stride sizes, and pad lengths defined by the
+ConvPoolOpBase operator. Max pooling consisting of taking the maximumvalue of a
+subset of the input tensor according to the kernel size and downsampling the
+data into the output blob Y for further processing.
+  )DOC")
+    .Input(
+        0,
+        "X",
+        "Input data tensor from the previous operator; dimensions depend on "
+        "whether the NCHW or NHWC operators are being used. For example, in "
+        "the former, the input has size (N x C x H x W), where N is the batch "
+        "size, C is the number of channels, and H and W are the height and the "
+        "width of the data. The corresponding permutation of dimensions is "
+        "used in the latter case.")
+    .Output(
+        0,
+        "Y",
+        "Output data tensor from max pooling across the input "
+        "tensor. Dimensions will vary based on various kernel, stride, and pad "
+        "sizes.");
 
-REGISTER_CPU_OPERATOR(MaxPool1D, PoolOp<float, CPUContext, MaxPool<float>>);
-
-OPERATOR_SCHEMA(MaxPool1D)
-    .NumInputs(1)
-    .NumOutputs(1)
-    .TensorInferenceFunction(ConvPoolOpBase<CPUContext>::TensorInferenceForPool)
-    .FillUsing(MaxPoolDocGenerator("1D"))
-    .InheritOnnxSchema("MaxPool");
-
-REGISTER_CPU_OPERATOR(MaxPool2D, PoolOp<float, CPUContext, MaxPool<float>>);
-
-OPERATOR_SCHEMA(MaxPool2D)
-    .NumInputs(1)
-    .NumOutputs(1)
-    .TensorInferenceFunction(ConvPoolOpBase<CPUContext>::TensorInferenceForPool)
-    .FillUsing(MaxPoolDocGenerator("2D"))
-    .InheritOnnxSchema("MaxPool");
-
-REGISTER_CPU_OPERATOR(MaxPool3D, PoolOp<float, CPUContext, MaxPool<float>>);
-
-OPERATOR_SCHEMA(MaxPool3D)
-    .NumInputs(1)
-    .NumOutputs(1)
-    .TensorInferenceFunction(ConvPoolOpBase<CPUContext>::TensorInferenceForPool)
-    .FillUsing(MaxPoolDocGenerator("3D"))
-    .InheritOnnxSchema("MaxPool");
-} // namespace caffe2
+}  // namespace caffe2

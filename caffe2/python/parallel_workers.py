@@ -39,7 +39,6 @@ import atexit
 import time
 import collections
 import six
-import traceback
 
 from abc import ABCMeta, abstractmethod
 
@@ -53,16 +52,14 @@ def init_workers(
     num_worker_threads=2,
     worker_name="train",
     init_fun=None,
-    external_loggers=None,
-    shutdown_fun=None,
+    external_loggers=None
 ):
     global global_coordinator
 
     metrics = Metrics(external_loggers)
 
     # Create coordinator object
-    coordinator = WorkerCoordinator(
-        worker_name, init_fun, shutdown_fun=shutdown_fun)
+    coordinator = WorkerCoordinator(worker_name, init_fun)
 
     # Launch fetch worker threads
     worker_ids = [
@@ -125,22 +122,20 @@ class State():
 
 
 class WorkerCoordinator(object):
-    def __init__(self, worker_name, init_fun, state=None, shutdown_fun=None):
+    def __init__(self, worker_name, init_fun, state=None):
         self._active = True
         self._started = False
         self._workers = []
         self._worker_name = worker_name
         self._init_fun = init_fun
         self._state = state
-        self._shutdown_fun = shutdown_fun
 
     def is_active(self):
         return self._active
 
     def init(self, global_coordinator):
         if self._init_fun and not self._started:
-            data_coordinator = self
-            self._init_fun(data_coordinator, global_coordinator)
+            self._init_fun(self, global_coordinator)
 
     def _start(self):
         if self._started:
@@ -158,8 +153,6 @@ class WorkerCoordinator(object):
         self._active = False
         if reason is not None:
             log.error("Data input failed due to an error: {}".format(reason))
-        if self._shutdown_fun and self._started:
-            self._shutdown_fun()
         if self._state:
             self._state.stop()
 
@@ -204,11 +197,8 @@ class GlobalWorkerCoordinator(object):
         return self._worker_ids
 
     def start(self):
-        # run init and start in separate for loop to
-        # ensure init happens serially before threads are spawn.
         for c in self._coordinators:
             c.init(self)
-        for c in self._coordinators:
             c._start()
 
     def stop(self):
@@ -261,7 +251,7 @@ class Worker(object):
         self._worker_fun(self._worker_id)
 
     def handle_exception(self, e):
-        traceback.print_exc()
+        print(e)
         logging.exception("Exception in worker", e)
         self._coordinator._stop("Exception in worker {}: {}".format(
             self._worker_id, e

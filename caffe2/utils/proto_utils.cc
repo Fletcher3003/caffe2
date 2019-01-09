@@ -4,42 +4,19 @@
 #include <cerrno>
 #include <fstream>
 
-#include <google/protobuf/io/coded_stream.h>
+#include "google/protobuf/io/coded_stream.h"
+#include "google/protobuf/io/zero_copy_stream_impl.h"
 
 #ifndef CAFFE2_USE_LITE_PROTO
-#include <google/protobuf/text_format.h>
-#include <google/protobuf/io/zero_copy_stream_impl.h>
-#else
-#include <google/protobuf/io/zero_copy_stream_impl_lite.h>
+#include "google/protobuf/text_format.h"
 #endif  // !CAFFE2_USE_LITE_PROTO
 
 #include "caffe2/core/logging.h"
 
+using ::google::protobuf::Message;
 using ::google::protobuf::MessageLite;
 
-namespace caffe {
-
-// Caffe wrapper functions for protobuf's GetEmptyStringAlreadyInited() function
-// used to avoid duplicated global variable in the case when protobuf
-// is built with hidden visibility.
-const ::std::string& GetEmptyStringAlreadyInited() {
-  return ::google::protobuf::internal::GetEmptyStringAlreadyInited();
-}
-
-}  // namespace caffe
-
 namespace caffe2 {
-
-// Caffe2 wrapper functions for protobuf's GetEmptyStringAlreadyInited() function
-// used to avoid duplicated global variable in the case when protobuf
-// is built with hidden visibility.
-const ::std::string& GetEmptyStringAlreadyInited() {
-  return ::google::protobuf::internal::GetEmptyStringAlreadyInited();
-}
-
-void ShutdownProtobufLibrary() {
-  ::google::protobuf::ShutdownProtobufLibrary();
-}
 
 std::string DeviceTypeName(const int32_t& d) {
   switch (d) {
@@ -47,8 +24,6 @@ std::string DeviceTypeName(const int32_t& d) {
       return "CPU";
     case CUDA:
       return "CUDA";
-    case OPENGL:
-      return "OPENGL";
     case MKLDNN:
       return "MKLDNN";
     default:
@@ -63,14 +38,6 @@ std::string DeviceTypeName(const int32_t& d) {
       return "";
   }
 };
-
-bool IsSameDevice(const DeviceOption& lhs, const DeviceOption& rhs) {
-  return (
-      lhs.device_type() == rhs.device_type() &&
-      lhs.cuda_gpu_id() == rhs.cuda_gpu_id() &&
-      lhs.node_name() == rhs.node_name() &&
-      lhs.numa_node_id() == rhs.numa_node_id());
-}
 
 bool ReadStringFromFile(const char* filename, string* str) {
   std::ifstream ifs(filename, std::ios::in);
@@ -125,18 +92,6 @@ class IfstreamInputStream : public ::google::protobuf::io::CopyingInputStream {
 };
 }  // namespace
 
-string ProtoDebugString(const MessageLite& proto) {
-  return proto.SerializeAsString();
-}
-
-bool ParseProtoFromLargeString(const string& str, MessageLite* proto) {
-  ::google::protobuf::io::ArrayInputStream input_stream(str.data(), str.size());
-  ::google::protobuf::io::CodedInputStream coded_stream(&input_stream);
-  // Set PlanDef message size limit to 1G.
-  coded_stream.SetTotalBytesLimit(1024LL << 20, 512LL << 20);
-  return proto->ParseFromCodedStream(&coded_stream);
-}
-
 bool ReadProtoFromBinaryFile(const char* filename, MessageLite* proto) {
   ::google::protobuf::io::CopyingInputStreamAdaptor stream(
       new IfstreamInputStream(filename));
@@ -164,25 +119,6 @@ using ::google::protobuf::io::ZeroCopyInputStream;
 using ::google::protobuf::io::CodedInputStream;
 using ::google::protobuf::io::ZeroCopyOutputStream;
 using ::google::protobuf::io::CodedOutputStream;
-using ::google::protobuf::Message;
-
-namespace TextFormat {
-bool ParseFromString(const string& spec, Message* proto) {
-  return ::google::protobuf::TextFormat::ParseFromString(spec, proto);
-}
-} // namespace TextFormat
-
-string ProtoDebugString(const Message& proto) {
-  return proto.ShortDebugString();
-}
-
-bool ParseProtoFromLargeString(const string& str, Message* proto) {
-  ::google::protobuf::io::ArrayInputStream input_stream(str.data(), str.size());
-  ::google::protobuf::io::CodedInputStream coded_stream(&input_stream);
-  // Set PlanDef message size limit to 1G.
-  coded_stream.SetTotalBytesLimit(1024LL << 20, 512LL << 20);
-  return proto->ParseFromCodedStream(&coded_stream);
-}
 
 bool ReadProtoFromTextFile(const char* filename, Message* proto) {
   int fd = open(filename, O_RDONLY);
@@ -236,7 +172,6 @@ void WriteProtoToBinaryFile(const MessageLite& proto, const char* filename) {
 
 #endif  // CAFFE2_USE_LITE_PROTO
 
-
 ArgumentHelper::ArgumentHelper(const OperatorDef& def) {
   for (auto& arg : def.arg()) {
     if (arg_map_.count(arg.name())) {
@@ -249,8 +184,7 @@ ArgumentHelper::ArgumentHelper(const OperatorDef& def) {
             "but with different contents.",
             ProtoDebugString(def));
       } else {
-        LOG(WARNING) << "Duplicated argument name [" << arg.name()
-                     << "] found in operator def: "
+        LOG(WARNING) << "Duplicated argument name found in operator def: "
                      << ProtoDebugString(def);
       }
     }
@@ -262,7 +196,7 @@ ArgumentHelper::ArgumentHelper(const NetDef& netdef) {
   for (auto& arg : netdef.arg()) {
     CAFFE_ENFORCE(
         arg_map_.count(arg.name()) == 0,
-        "Duplicated argument name [", arg.name(), "] found in net def: ",
+        "Duplicated argument name found in net def: ",
         ProtoDebugString(netdef));
     arg_map_[arg.name()] = arg;
   }
@@ -279,15 +213,6 @@ template <typename InputType, typename TargetType>
 bool SupportsLosslessConversion(const InputType& value) {
   return static_cast<InputType>(static_cast<TargetType>(value)) == value;
 }
-}
-
-bool operator==(const NetDef& l, const NetDef& r) {
-  return l.SerializeAsString() == r.SerializeAsString();
-}
-
-std::ostream& operator<<(std::ostream& output, const NetDef& n) {
-  output << n.SerializeAsString();
-  return output;
 }
 
 #define INSTANTIATE_GET_SINGLE_ARGUMENT(                                      \
@@ -317,7 +242,7 @@ std::ostream& operator<<(std::ostream& output, const NetDef& n) {
           name,                                                               \
           "cannot be represented correctly in a target type");                \
     }                                                                         \
-    return static_cast<T>(value);                                             \
+    return value;                                                             \
   }                                                                           \
   template <>                                                                 \
   bool ArgumentHelper::HasSingleArgumentOfType<T>(const string& name) const { \
@@ -338,7 +263,6 @@ INSTANTIATE_GET_SINGLE_ARGUMENT(uint8_t, i, true)
 INSTANTIATE_GET_SINGLE_ARGUMENT(uint16_t, i, true)
 INSTANTIATE_GET_SINGLE_ARGUMENT(size_t, i, true)
 INSTANTIATE_GET_SINGLE_ARGUMENT(string, s, false)
-INSTANTIATE_GET_SINGLE_ARGUMENT(NetDef, n, false)
 #undef INSTANTIATE_GET_SINGLE_ARGUMENT
 
 #define INSTANTIATE_GET_REPEATED_ARGUMENT(                             \
@@ -362,7 +286,7 @@ INSTANTIATE_GET_SINGLE_ARGUMENT(NetDef, n, false)
             name,                                                      \
             "cannot be represented correctly in a target type");       \
       }                                                                \
-      values.push_back(static_cast<T>(v));                             \
+      values.push_back(v);                                             \
     }                                                                  \
     return values;                                                     \
   }
@@ -378,7 +302,6 @@ INSTANTIATE_GET_REPEATED_ARGUMENT(uint8_t, ints, true)
 INSTANTIATE_GET_REPEATED_ARGUMENT(uint16_t, ints, true)
 INSTANTIATE_GET_REPEATED_ARGUMENT(size_t, ints, true)
 INSTANTIATE_GET_REPEATED_ARGUMENT(string, strings, false)
-INSTANTIATE_GET_REPEATED_ARGUMENT(NetDef, nets, false)
 #undef INSTANTIATE_GET_REPEATED_ARGUMENT
 
 #define CAFFE2_MAKE_SINGULAR_ARGUMENT(T, fieldname)                            \
@@ -421,24 +344,6 @@ CAFFE2_MAKE_REPEATED_ARGUMENT(int, ints)
 CAFFE2_MAKE_REPEATED_ARGUMENT(int64_t, ints)
 CAFFE2_MAKE_REPEATED_ARGUMENT(string, strings)
 #undef CAFFE2_MAKE_REPEATED_ARGUMENT
-
-bool HasOutput(const OperatorDef& op, const std::string& output) {
-  for (const auto& outp : op.output()) {
-    if (outp == output) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool HasInput(const OperatorDef& op, const std::string& input) {
-  for (const auto& inp : op.input()) {
-    if (inp == input) {
-      return true;
-    }
-  }
-  return false;
-}
 
 const Argument& GetArgument(const OperatorDef& def, const string& name) {
   for (const Argument& arg : def.arg()) {

@@ -7,6 +7,7 @@ from __future__ import unicode_literals
 
 import argparse
 from future.utils import viewitems
+from itertools import izip
 import logging
 import numpy as np
 import sys
@@ -126,6 +127,7 @@ class Seq2SeqModelCaffe2EnsembleDecoder(object):
                 )
 
             cell = rnn_cell.LSTMCell(
+                name=seq2seq_util.get_layer_scope(scope, 'decoder', i),
                 forward_only=True,
                 input_size=input_size,
                 hidden_size=num_units,
@@ -317,7 +319,7 @@ class Seq2SeqModelCaffe2EnsembleDecoder(object):
         state_configs = []
         output_log_probs = []
         attention_weights = []
-        for model, scope_name in zip(
+        for model, scope_name in izip(
             self.models,
             self.decoder_scope_names,
         ):
@@ -373,8 +375,7 @@ class Seq2SeqModelCaffe2EnsembleDecoder(object):
             [],
             'word_rewards',
             shape=[self.target_vocab_size],
-            value=0.0,
-            dtype=core.DataType.FLOAT,
+            value=0,
         )
         (
             self.output_token_beam_list,
@@ -387,7 +388,6 @@ class Seq2SeqModelCaffe2EnsembleDecoder(object):
             log_probs=output_log_probs_average,
             attentions=attention_weights_average,
             state_configs=state_configs,
-            data_dependencies=[],
             word_rewards=word_rewards,
         )
 
@@ -416,7 +416,7 @@ class Seq2SeqModelCaffe2EnsembleDecoder(object):
 
     def load_models(self):
         db_reader = 'reader'
-        for model, scope_name in zip(
+        for model, scope_name in izip(
             self.models,
             self.decoder_scope_names,
         ):
@@ -460,7 +460,7 @@ class Seq2SeqModelCaffe2EnsembleDecoder(object):
             np.array([max_output_seq_len]).astype(dtype=np.int64),
         )
 
-        workspace.RunNet(self.model.net)
+        workspace.RunNetOnce(self.model.net)
 
         num_steps = max_output_seq_len
         score_beam_list = workspace.FetchBlob(self.output_score_beam_list)
@@ -570,14 +570,10 @@ def main():
                         'in encoder')
     parser.add_argument('--use-attention', action='store_true',
                         help='Set flag to use seq2seq with attention model')
-    parser.add_argument('--encoder-cell-num-units', type=int, default=512,
-                        help='Number of cell units per encoder layer')
-    parser.add_argument('--encoder-num-layers', type=int, default=2,
-                        help='Number encoder layers')
+    parser.add_argument('--encoder-cell-num-units', type=int, default=256,
+                        help='Number of cell units in the encoder layer')
     parser.add_argument('--decoder-cell-num-units', type=int, default=512,
                         help='Number of cell units in the decoder layer')
-    parser.add_argument('--decoder-num-layers', type=int, default=2,
-                        help='Number decoder layers')
     parser.add_argument('--encoder-embedding-size', type=int, default=256,
                         help='Size of embedding in the encoder layer')
     parser.add_argument('--decoder-embedding-size', type=int, default=512,
@@ -598,29 +594,21 @@ def main():
 
     args = parser.parse_args()
 
-    encoder_layer_configs = [
-        dict(
-            num_units=args.encoder_cell_num_units,
-        ),
-    ] * args.encoder_num_layers
-
-    if args.use_bidirectional_encoder:
-        assert args.encoder_cell_num_units % 2 == 0
-        encoder_layer_configs[0]['num_units'] /= 2
-
-    decoder_layer_configs = [
-        dict(
-            num_units=args.decoder_cell_num_units,
-        ),
-    ] * args.decoder_num_layers
-
     run_seq2seq_beam_decoder(
         args,
         model_params=dict(
             attention=('regular' if args.use_attention else 'none'),
-            decoder_layer_configs=decoder_layer_configs,
+            decoder_layer_configs=[
+                dict(
+                    num_units=args.decoder_cell_num_units,
+                ),
+            ],
             encoder_type=dict(
-                encoder_layer_configs=encoder_layer_configs,
+                encoder_layer_configs=[
+                    dict(
+                        num_units=args.encoder_cell_num_units,
+                    ),
+                ],
                 use_bidirectional_encoder=args.use_bidirectional_encoder,
             ),
             encoder_embedding_size=args.encoder_embedding_size,

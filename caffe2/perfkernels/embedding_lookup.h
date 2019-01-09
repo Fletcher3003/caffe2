@@ -23,18 +23,14 @@ namespace caffe2 {
  *   for (j = 0..lengths[i]-1)
  *     for (k = 0..block_size-1)
  *       out[i*block_size + k] += input[indices[pos]*block_size + k] *
- *           (weights ? weights[IS_WEIGHT_POSITIONAL ? j : pos] : 1.0)
+ *                                (weights ? weights[pos] : 1.0)
  *     pos += 1
  *   if (normalize_weights && lengths[i] > 0)
  *     for (k = 0..block_size-1)
  *       out[i*block_size + k] /= lengths[i]
  *
  */
-template <
-    typename IndexType,
-    typename InType,
-    typename OutType,
-    bool IS_WEIGHT_POSITIONAL = false>
+template <typename IndexType, typename InType, typename OutType>
 void EmbeddingLookup(
     const TIndex block_size,
     const TIndex output_size,
@@ -44,7 +40,6 @@ void EmbeddingLookup(
     const IndexType* indices,
     const int* lengths,
     const float* weights, // optional, can be null for non-weighted sum
-    const float* scale_bias, // optional scale & bias params for uint8 input
     bool normalize_by_lengths,
     OutType* out);
 

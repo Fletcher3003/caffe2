@@ -178,12 +178,10 @@ class Text(object):
 
 
 class Printer(Visitor, Text):
-    def __init__(self, factor_prefixes=False, c2_syntax=True):
+    def __init__(self, factor_prefixes=False):
         super(Visitor, self).__init__()
         super(Text, self).__init__()
         self.factor_prefixes = factor_prefixes
-        self.c2_syntax = c2_syntax
-        self.c2_net_name = None
 
 
 def _sanitize_str(s):
@@ -194,9 +192,9 @@ def _sanitize_str(s):
     else:
         sanitized = str(s)
     if len(sanitized) < 64:
-        return "'%s'" % sanitized
+        return sanitized
     else:
-        return "'%s'" % sanitized[:64] + '...<+len=%d>' % (len(sanitized) - 64)
+        return sanitized[:64] + '...<+len=%d>' % (len(sanitized) - 64)
 
 
 def _arg_val(arg):
@@ -227,15 +225,8 @@ def commonprefix(m):
     return s1
 
 
-def format_value(val):
-    if isinstance(val, list):
-        return '[%s]' % ', '.join("'%s'" % str(v) for v in val)
-    else:
-        return str(val)
-
-
 def factor_prefix(vals, do_it):
-    vals = [format_value(v) for v in vals]
+    vals = [str(v) for v in vals]
     prefix = commonprefix(vals) if len(vals) > 1 and do_it else ''
     joined = ', '.join(v[len(prefix):] for v in vals)
     return '%s[%s]' % (prefix, joined) if prefix else joined
@@ -260,48 +251,20 @@ def call(op, inputs=None, outputs=None, factor_prefixes=False):
         factor_prefix(outputs, factor_prefixes), call)
 
 
-def format_device_option(dev_opt):
-    if not dev_opt or not (
-            dev_opt.device_type or dev_opt.cuda_gpu_id or dev_opt.node_name):
-        return None
-    return call(
-        'DeviceOption',
-        [dev_opt.device_type, dev_opt.cuda_gpu_id, "'%s'" % dev_opt.node_name])
-
-
 @Printer.register(OperatorDef)
 def print_op(text, op):
-    args = [(a.name, _arg_val(a)) for a in op.arg]
-    dev_opt_txt = format_device_option(op.device_option)
-    if dev_opt_txt:
-        args.append(('device_option', dev_opt_txt))
+    text.add(call(
+        op.type,
+        list(op.input) + [(a.name, _arg_val(a)) for a in op.arg],
+        op.output,
+        factor_prefixes=text.factor_prefixes))
 
-    if text.c2_net_name:
-        text.add(call(
-            text.c2_net_name + '.' + op.type,
-            [list(op.input), list(op.output)] + args))
-    else:
-        text.add(call(
-            op.type,
-            list(op.input) + args,
-            op.output,
-            factor_prefixes=text.factor_prefixes))
-    for arg in op.arg:
-        if arg.HasField('n'):
-            with text.context('arg: %s' % arg.name):
-                text(arg.n)
 
 @Printer.register(NetDef)
 def print_net_def(text, net_def):
-    if text.c2_syntax:
-        text.add(call('core.Net', ["'%s'" % net_def.name], [net_def.name]))
-        text.c2_net_name = net_def.name
-    else:
-        text.add('# net: %s' % net_def.name)
+    text.add('# net: %s' % net_def.name)
     for op in net_def.op:
         text(op)
-    if text.c2_syntax:
-        text.c2_net_name = None
 
 
 @Printer.register(Net)
@@ -385,16 +348,15 @@ def print_job(text, job):
     with text.context('Job.current().stop_signals'):
         for out in job.stop_signals:
             text.add(_print_task_output(out))
-    text(job.download_group, 'Job.current().download_group')
     text(job.exit_group, 'Job.current().exit_group')
 
 
-def to_string(obj, **kwargs):
+def to_string(obj):
     """
     Given a Net, ExecutionStep, Task, TaskGroup or Job, produces a string
     with detailed description of the execution steps.
     """
-    printer = Printer(**kwargs)
+    printer = Printer()
     printer(obj)
     return str(printer)
 

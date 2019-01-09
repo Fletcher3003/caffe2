@@ -1,6 +1,6 @@
+#include <google/protobuf/text_format.h>
 #include <gtest/gtest.h>
 #include "caffe2/core/net.h"
-#include "caffe2/core/net_dag.h"
 #include "caffe2/core/operator.h"
 #include "caffe2/core/scope_guard.h"
 
@@ -29,15 +29,6 @@ class NetTestDummyOp final : public OperatorBase {
     }
     counter.fetch_add(1);
     return true;
-  }
-
-  // Simulate CUDA operator behavior
-  bool HasAsyncPart() const override {
-    return debug_def().device_option().device_type() == CUDA;
-  }
-
-  bool SupportsAsyncScheduling() const override {
-    return debug_def().device_option().device_type() == CUDA;
   }
 
  protected:
@@ -140,11 +131,11 @@ void testExecution(std::unique_ptr<NetBase>& net, int num_ops) {
 
 void checkChainingAndRun(
     const char* spec,
-    const dag_utils::ExecutionChains& expected) {
+    const DAGNetBase::ExecutionChains& expected) {
   Workspace ws;
   ws.CreateBlob("in");
   NetDef net_def;
-  CAFFE_ENFORCE(TextFormat::ParseFromString(spec, &net_def));
+  CAFFE_ENFORCE(google::protobuf::TextFormat::ParseFromString(spec, &net_def));
   {
     net_def.set_num_workers(4);
     auto old = FLAGS_caffe2_disable_chaining;
@@ -164,7 +155,7 @@ void checkNumChainsAndRun(const char* spec, const int expected_num_chains) {
   Workspace ws;
 
   NetDef net_def;
-  CAFFE_ENFORCE(TextFormat::ParseFromString(spec, &net_def));
+  CAFFE_ENFORCE(google::protobuf::TextFormat::ParseFromString(spec, &net_def));
   net_def.set_num_workers(4);
 
   // Create all external inputs
@@ -203,6 +194,45 @@ TEST(NetTest, ChainingForLinearModel) {
         }
 )DOC";
   checkChainingAndRun(spec, {{0, {0, 1}}});
+}
+
+TEST(NetTest, ChainingForDifferentDevices) {
+  const auto spec = R"DOC(
+        name: "example"
+        type: "dag"
+        external_input: "in"
+        op {
+          input: "in"
+          output: "hidden"
+          type: "NetTestDummy"
+        }
+        op {
+          input: "hidden"
+          output: "out"
+          type: "NetTestDummy"
+          device_option {
+            device_type: 1
+          }
+        }
+        op {
+          input: "out"
+          output: "out2"
+          type: "NetTestDummy"
+          device_option {
+            device_type: 1
+          }
+        }
+        op {
+          input: "out2"
+          output: "out3"
+          type: "NetTestDummy"
+          device_option {
+            device_type: 1
+            cuda_gpu_id: 1
+          }
+        }
+)DOC";
+  checkChainingAndRun(spec, {{0, {0}}, {1, {1, 2}}, {3, {3}}});
 }
 
 TEST(NetTest, ChainingForFork) {
@@ -563,7 +593,7 @@ TEST(NetTest, FailingOperator) {
   ws.CreateBlob("in");
 
   NetDef net_def;
-  CAFFE_ENFORCE(TextFormat::ParseFromString(spec, &net_def));
+  CAFFE_ENFORCE(google::protobuf::TextFormat::ParseFromString(spec, &net_def));
 
   {
     net_def.set_num_workers(4);
@@ -574,7 +604,7 @@ TEST(NetTest, FailingOperator) {
     std::unique_ptr<NetBase> net(CreateNet(net_def, &ws));
     for (int i = 0; i < 10; i++) {
       counter.exchange(0);
-      ASSERT_FALSE(net.get()->Run());
+      ASSERT_EQ(false, net.get()->Run());
       ASSERT_EQ(1, counter.load());
     }
   }

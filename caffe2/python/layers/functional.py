@@ -35,7 +35,7 @@ class Functional(ModelLayer):
              output_names_or_num != 1)
         )
 
-        with scope.NameScope(self.name, reset=True):
+        with scope.NameScope(self.name):
             if isinstance(output_names_or_num, int):
                 struct_output_schema = schema.NewRecord(
                     model.net, schema.RawTuple(output_names_or_num))
@@ -106,8 +106,6 @@ class Functional(ModelLayer):
                     dtype = (np.int32, shape)
                 elif types[blob] == caffe2_pb2.TensorProto.INT64:
                     dtype = (np.int64, shape)
-                elif types[blob] == caffe2_pb2.TensorProto.FLOAT16:
-                    dtype = (np.float16, shape)
 
                 if dtype is not None:
                     scalar_schema.set_type(dtype)

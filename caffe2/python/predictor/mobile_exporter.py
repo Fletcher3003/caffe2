@@ -7,46 +7,13 @@ from __future__ import print_function
 from __future__ import unicode_literals
 from caffe2.python import core, utils
 from caffe2.proto import caffe2_pb2
-import numpy as np
-
-
-def add_tensor(net, name, blob):
-    ''' Create an operator to store the tensor 'blob',
-        run the operator to put the blob to workspace.
-        uint8 is stored as an array of string with one element.
-    '''
-    kTypeNameMapper = {
-        np.dtype('float32'): "GivenTensorFill",
-        np.dtype('int32'): "GivenTensorIntFill",
-        np.dtype('int64'): "GivenTensorInt64Fill",
-        np.dtype('uint8'): "GivenTensorStringFill",
-    }
-
-    shape = blob.shape
-    values = blob
-    # pass array of uint8 as a string to save storage
-    # storing uint8_t has a large overhead for now
-    if blob.dtype == np.dtype('uint8'):
-        shape = [1]
-        values = [str(blob.data)]
-
-    op = core.CreateOperator(
-        kTypeNameMapper[blob.dtype],
-        [], [name],
-        arg=[
-            utils.MakeArgument("shape", shape),
-            utils.MakeArgument("values", values),
-        ]
-    )
-    net.op.extend([op])
 
 
 def Export(workspace, net, params):
     """Returns init_net and predict_net suitable for writing to disk
        and loading into a Predictor"""
-    proto = net if isinstance(net, caffe2_pb2.NetDef) else net.Proto()
     predict_net = caffe2_pb2.NetDef()
-    predict_net.CopyFrom(proto)
+    predict_net.CopyFrom(net.Proto())
     init_net = caffe2_pb2.NetDef()
     # Populate the init_net.
     ssa, blob_versions = core.get_ssa(net)
@@ -66,7 +33,17 @@ def Export(workspace, net, params):
     for blob_ref in params:
         blob_name = str(blob_ref)
         blob = workspace.FetchBlob(blob_name)
-        add_tensor(init_net, blob_name, blob)
+        init_net.op.extend(
+            [
+                core.CreateOperator(
+                    "GivenTensorFill", [], [blob_name],
+                    arg=[
+                        utils.MakeArgument("shape", blob.shape),
+                        utils.MakeArgument("values", blob)
+                    ]
+                )
+            ]
+        )
     # We have to make sure the blob exists in the namespace
     # and we can do so with fake data. (Which is immediately overwritten
     # by any typical usage)
@@ -87,7 +64,7 @@ def Export(workspace, net, params):
     del predict_net.external_input[:]
     predict_net.external_input.extend(input_blobs)
     # For populating weights
-    predict_net.external_input.extend(proto.external_input)
+    predict_net.external_input.extend(net.Proto().external_input)
     # Ensure the output is also consistent with what we want
     del predict_net.external_output[:]
     predict_net.external_output.extend(output_blobs)

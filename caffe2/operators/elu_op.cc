@@ -15,7 +15,7 @@ bool EluOp<float, CPUContext>::RunOnDevice() {
   auto* Ydata = Y->template mutable_data<float>();
   ConstEigenVectorArrayMap<float> Xvec(Xdata, X.size());
   EigenVectorArrayMap<float> Yvec(Ydata, Y->size());
-  Yvec = Xvec.cwiseMax(0.f) + (alpha_ * (Xvec.exp() - 1.0f)).cwiseMin(0.f);
+  Yvec = (Xvec > 0).select(Xvec, alpha_ * (Xvec.exp() - 1.0f));
   return true;
 }
 
@@ -55,8 +55,7 @@ Elu takes one input data (Tensor<T>) and produces one output data
 
 )DOC")
     .Input(0, "X", "1D input tensor")
-    .Output(0, "Y", "1D input tensor")
-    .InheritOnnxSchema("Elu");
+    .Output(0, "Y", "1D input tensor");
 
 // Input: Y, dY, output: dX
 OPERATOR_SCHEMA(EluGradient)

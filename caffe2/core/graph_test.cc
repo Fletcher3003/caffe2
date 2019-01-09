@@ -1,3 +1,4 @@
+#include <google/protobuf/text_format.h>
 #include <gtest/gtest.h>
 #include "caffe2/core/graph.h"
 #include "caffe2/core/net.h"
@@ -11,7 +12,7 @@ using transform::Graph;
 
 static std::atomic<int> counter;
 
-class GraphDummyOp final : public OperatorBase {
+class DummyOp final : public OperatorBase {
  public:
   using OperatorBase::OperatorBase;
   bool Run(int /* unused */) override {
@@ -20,23 +21,23 @@ class GraphDummyOp final : public OperatorBase {
   }
 };
 
-REGISTER_CPU_OPERATOR(GraphDummyOp1, GraphDummyOp);
+REGISTER_CPU_OPERATOR(DummyOp1, DummyOp);
 
-OPERATOR_SCHEMA(GraphDummyOp1)
+OPERATOR_SCHEMA(DummyOp1)
     .NumInputs(0, INT_MAX)
     .NumOutputs(0, INT_MAX)
     .AllowInplace({{0, 0}, {1, 1}});
 
-REGISTER_CPU_OPERATOR(GraphDummyOp2, GraphDummyOp);
+REGISTER_CPU_OPERATOR(DummyOp2, DummyOp);
 
-OPERATOR_SCHEMA(GraphDummyOp2)
+OPERATOR_SCHEMA(DummyOp2)
     .NumInputs(0, INT_MAX)
     .NumOutputs(0, INT_MAX)
     .AllowInplace({{0, 0}, {1, 1}});
 
-REGISTER_CPU_OPERATOR(GraphDummyOp3, GraphDummyOp);
+REGISTER_CPU_OPERATOR(DummyOp3, DummyOp);
 
-OPERATOR_SCHEMA(GraphDummyOp3)
+OPERATOR_SCHEMA(DummyOp3)
     .NumInputs(0, INT_MAX)
     .NumOutputs(0, INT_MAX)
     .AllowInplace({{0, 0}, {1, 1}});
@@ -61,10 +62,10 @@ TEST(GraphTest, TestGenerateGraphChain) {
   Workspace ws;
   ws.CreateBlob("in");
   NetDef netdef;
-  AddOp(&netdef, "GraphDummyOp1", {"in"}, {"mid1"});
-  AddOp(&netdef, "GraphDummyOp2", {"mid1"}, {"mid2"});
-  AddOp(&netdef, "GraphDummyOp1", {"mid2"}, {"mid3"});
-  AddOp(&netdef, "GraphDummyOp2", {"mid3"}, {"out"});
+  AddOp(&netdef, "DummyOp1", {"in"}, {"mid1"});
+  AddOp(&netdef, "DummyOp2", {"mid1"}, {"mid2"});
+  AddOp(&netdef, "DummyOp1", {"mid2"}, {"mid3"});
+  AddOp(&netdef, "DummyOp2", {"mid3"}, {"out"});
   Graph g(netdef);
   EXPECT_EQ(g.size(), 4);
   for (int i = 0; i < 4; i++) {
@@ -85,10 +86,10 @@ TEST(GraphTest, TestGenerateGraphChainInPlace) {
   Workspace ws;
   ws.CreateBlob("in");
   NetDef netdef;
-  AddOp(&netdef, "GraphDummyOp1", {"in"}, {"out"});
-  AddOp(&netdef, "GraphDummyOp2", {"out"}, {"out"});
-  AddOp(&netdef, "GraphDummyOp1", {"out"}, {"out"});
-  AddOp(&netdef, "GraphDummyOp2", {"out"}, {"out"});
+  AddOp(&netdef, "DummyOp1", {"in"}, {"out"});
+  AddOp(&netdef, "DummyOp2", {"out"}, {"out"});
+  AddOp(&netdef, "DummyOp1", {"out"}, {"out"});
+  AddOp(&netdef, "DummyOp2", {"out"}, {"out"});
   Graph g(netdef);
   EXPECT_EQ(g.size(), 4);
   for (int i = 0; i < 4; i++) {
@@ -111,10 +112,10 @@ TEST(GraphTest, TestGenerateGraphBranch) {
   ws.CreateBlob("in");
   NetDef netdef;
 
-  AddOp(&netdef, "GraphDummyOp1", {"in"}, {"mid1"});
-  AddOp(&netdef, "GraphDummyOp2", {"mid1"}, {"mid2"});
-  AddOp(&netdef, "GraphDummyOp2", {"mid1"}, {"mid3"});
-  AddOp(&netdef, "GraphDummyOp3", {"mid2", "mid3"}, {"out"});
+  AddOp(&netdef, "DummyOp1", {"in"}, {"mid1"});
+  AddOp(&netdef, "DummyOp2", {"mid1"}, {"mid2"});
+  AddOp(&netdef, "DummyOp2", {"mid1"}, {"mid3"});
+  AddOp(&netdef, "DummyOp3", {"mid2", "mid3"}, {"out"});
 
   Graph g(netdef);
 
@@ -138,13 +139,13 @@ TEST(GraphTest, TestReusedInputs) {
   ws.CreateBlob("in");
   NetDef netdef;
 
-  AddOp(&netdef, "GraphDummyOp1", {"in"}, {"in"});
-  AddOp(&netdef, "GraphDummyOp2", {"in"}, {"mid1"});
-  AddOp(&netdef, "GraphDummyOp2", {"in"}, {"mid2"});
-  AddOp(&netdef, "GraphDummyOp3", {"mid1", "mid2"}, {"in"});
-  AddOp(&netdef, "GraphDummyOp2", {"in"}, {"mid1"});
-  AddOp(&netdef, "GraphDummyOp2", {"in"}, {"mid2"});
-  AddOp(&netdef, "GraphDummyOp3", {"mid1", "mid2"}, {"in"});
+  AddOp(&netdef, "DummyOp1", {"in"}, {"in"});
+  AddOp(&netdef, "DummyOp2", {"in"}, {"mid1"});
+  AddOp(&netdef, "DummyOp2", {"in"}, {"mid2"});
+  AddOp(&netdef, "DummyOp3", {"mid1", "mid2"}, {"in"});
+  AddOp(&netdef, "DummyOp2", {"in"}, {"mid1"});
+  AddOp(&netdef, "DummyOp2", {"in"}, {"mid2"});
+  AddOp(&netdef, "DummyOp3", {"mid1", "mid2"}, {"in"});
 
   Graph g(netdef);
 
@@ -173,13 +174,13 @@ TEST(GraphTest, TestGetPerimeter) {
   ws.CreateBlob("in");
   NetDef netdef;
 
-  AddOp(&netdef, "GraphDummyOp1", {"in"}, {"in"});
-  AddOp(&netdef, "GraphDummyOp2", {"in"}, {"mid1"});
-  AddOp(&netdef, "GraphDummyOp2", {"in"}, {"mid2"});
-  AddOp(&netdef, "GraphDummyOp3", {"mid1", "mid2"}, {"in"});
-  AddOp(&netdef, "GraphDummyOp2", {"in"}, {"mid1"});
-  AddOp(&netdef, "GraphDummyOp2", {"in"}, {"mid2"});
-  AddOp(&netdef, "GraphDummyOp1", {"mid1", "mid2"}, {"in"});
+  AddOp(&netdef, "DummyOp1", {"in"}, {"in"});
+  AddOp(&netdef, "DummyOp2", {"in"}, {"mid1"});
+  AddOp(&netdef, "DummyOp2", {"in"}, {"mid2"});
+  AddOp(&netdef, "DummyOp3", {"mid1", "mid2"}, {"in"});
+  AddOp(&netdef, "DummyOp2", {"in"}, {"mid1"});
+  AddOp(&netdef, "DummyOp2", {"in"}, {"mid2"});
+  AddOp(&netdef, "DummyOp1", {"mid1", "mid2"}, {"in"});
 
   Graph g(netdef);
   std::vector<int> subgraph = {3};

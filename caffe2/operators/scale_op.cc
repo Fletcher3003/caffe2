@@ -2,7 +2,7 @@
 
 namespace caffe2 {
 
-REGISTER_CPU_OPERATOR(Scale, ScaleOp<CPUContext>);
+REGISTER_CPU_OPERATOR(Scale, ScaleOp<float, CPUContext>);
 OPERATOR_SCHEMA(Scale)
   .NumInputs(1)
   .NumOutputs(1)

@@ -19,55 +19,33 @@ class PairwiseDotProduct(ModelLayer):
         assert isinstance(input_record, schema.Struct), (
             "Incorrect input type. Excpected Struct, but received: {0}".
             format(input_record))
-        assert (
-            ('all_embeddings' in input_record) ^
-            ('x_embeddings' in input_record and 'y_embeddings' in input_record)
-        ), (
-            "either (all_embeddings) xor (x_embeddings and y_embeddings) " +
-            "should be given."
-        )
-        if 'all_embeddings' in input_record:
-            x_embeddings = input_record['all_embeddings']
-            y_embeddings = input_record['all_embeddings']
-        else:
-            x_embeddings = input_record['x_embeddings']
-            y_embeddings = input_record['y_embeddings']
-
-        assert isinstance(x_embeddings, schema.Scalar), (
-            "Incorrect input type for x. Expected Scalar, " +
-            "but received: {0}".format(x_embeddings))
-        assert isinstance(y_embeddings, schema.Scalar), (
-            "Incorrect input type for y. Expected Scalar, " +
-            "but received: {0}".format(y_embeddings)
-        )
-
+        assert 'all_embeddings' in input_record, "all_embeddings is not given."
+        all_embeddings = input_record['all_embeddings']
+        assert isinstance(all_embeddings, schema.Scalar), (
+            "Incorrect input type. Excpected Scalar, but received: {0}".
+            format(all_embeddings))
         if 'indices_to_gather' in input_record:
             indices_to_gather = input_record['indices_to_gather']
             assert isinstance(indices_to_gather, schema.Scalar), (
                 "Incorrect type of indices_to_gather. "
                 "Expected Scalar, but received: {0}".format(indices_to_gather)
             )
-            self.indices_to_gather = indices_to_gather
-        else:
-            self.indices_to_gather = None
 
-        self.x_embeddings = x_embeddings
-        self.y_embeddings = y_embeddings
+        self.all_embeddings = all_embeddings
+        self.indices_to_gather = indices_to_gather
 
-        dtype = x_embeddings.field_types()[0].base
-
+        dtype = all_embeddings.field_types()[0].base
         self.output_schema = schema.Scalar(
-            (dtype, (output_dim,)),
+            (dtype, (output_dim)),
             self.get_next_blob_reference('output')
         )
 
     def add_ops(self, net):
         Y = net.BatchMatMul(
-            [self.x_embeddings(), self.y_embeddings()],
-            [self.x_embeddings() + '_matmul'],
+            [self.all_embeddings(), self.all_embeddings()],
+            [self.all_embeddings() + '_matmul'],
             trans_b=1,
         )
-
         if self.indices_to_gather:
             flattened = net.Flatten(
                 Y, Y + '_flatten',

@@ -100,7 +100,6 @@ def rnn_unidirectional_layer(
             dropout_ratio=dropout_ratio,
             name=(scope + '/' if scope else '') + 'dropout',
             forward_only=forward_only,
-            is_test=False,
         )
 
     outputs_with_grads = []
@@ -564,6 +563,7 @@ def build_embedding_decoder(
             input_size = decoder_cells[-1].get_output_dim()
 
         cell = rnn_cell.LSTMCell(
+            name=get_layer_scope(scope, 'decoder', i),
             forward_only=forward_only,
             input_size=input_size,
             hidden_size=num_units,
@@ -578,7 +578,6 @@ def build_embedding_decoder(
                 internal_cell=cell,
                 dropout_ratio=dropout_ratio,
                 forward_only=forward_only,
-                is_test=False,
                 name=get_layer_scope(scope, 'decoder_dropout', i),
             )
 
@@ -602,7 +601,6 @@ def build_embedding_decoder(
         decoder_num_units=decoder_units_per_layer[-1],
         decoder_cells=decoder_cells,
         weighted_encoder_outputs=weighted_encoder_outputs,
-        name=scope,
     )
     decoder_outputs, _ = attention_decoder.apply_over_sequence(
         model=model,

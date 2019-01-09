@@ -4,13 +4,12 @@ from __future__ import print_function
 from __future__ import unicode_literals
 
 from caffe2.python import core, workspace
-from hypothesis import assume, given
-from caffe2.proto import caffe2_pb2
+from hypothesis import given
 import caffe2.python.hypothesis_test_util as hu
 import hypothesis.strategies as st
 import numpy as np
 import random
-import unittest
+
 
 class TestUtilityOps(hu.HypothesisTestCase):
 
@@ -56,17 +55,13 @@ class TestUtilityOps(hu.HypothesisTestCase):
             outputs_with_grads=[0],
         )
 
-    @given(dtype=st.sampled_from([np.float32, np.int32]),
+    @given(dtype=st.sampled_from([np.float32, np.int32, np.int64]),
            ndims=st.integers(min_value=1, max_value=5),
            seed=st.integers(min_value=0, max_value=65536),
            null_axes=st.booleans(),
            engine=st.sampled_from(['CUDNN', None]),
            **hu.gcs)
     def test_transpose(self, dtype, ndims, seed, null_axes, engine, gc, dc):
-        if (gc.device_type == caffe2_pb2.CUDA and engine == "CUDNN"):
-            # cudnn 5.1 does not support int.
-            assume(workspace.GetCuDNNVersion() >= 6000 or dtype != np.int32) 
-
         dims = (np.random.rand(ndims) * 16 + 1).astype(np.int32)
         X = (np.random.rand(*dims) * 16).astype(dtype)
 
@@ -90,7 +85,6 @@ class TestUtilityOps(hu.HypothesisTestCase):
 
         self.assertReferenceChecks(gc, op, [X, axes],
                                    transpose_ref)
-
 
     @given(m=st.integers(5, 10), n=st.integers(5, 10),
            o=st.integers(5, 10), nans=st.booleans(), **hu.gcs)
@@ -149,7 +143,6 @@ class TestUtilityOps(hu.HypothesisTestCase):
         X = np.random.rand(n, m, d).astype(np.float32)
         Y = np.random.rand(n, m, d).astype(np.float32)
         Z = np.random.rand(n, m, d).astype(np.float32)
-        inputs = [X, Y, Z]
 
         def max_op(X, Y, Z):
             return [np.maximum(np.maximum(X, Y), Z)]
@@ -163,10 +156,9 @@ class TestUtilityOps(hu.HypothesisTestCase):
         self.assertReferenceChecks(
             device_option=gc,
             op=op,
-            inputs=inputs,
+            inputs=[X, Y, Z],
             reference=max_op,
         )
-        self.assertDeviceChecks(dc, op, inputs, [0])
 
     @given(n=st.integers(4, 5), m=st.integers(6, 7),
            d=st.integers(2, 3), **hu.gcs)
@@ -176,7 +168,6 @@ class TestUtilityOps(hu.HypothesisTestCase):
         Y = np.random.rand(n, m, d).astype(np.float32)
         Z = np.random.rand(n, m, d).astype(np.float32)
         mx = np.maximum(np.maximum(X, Y), Z)
-        inputs = [mx, go, X, Y, Z]
 
         def max_grad_op(mx, go, X, Y, Z):
             def mx_grad(a):
@@ -193,65 +184,9 @@ class TestUtilityOps(hu.HypothesisTestCase):
         self.assertReferenceChecks(
             device_option=gc,
             op=op,
-            inputs=inputs,
+            inputs=[mx, go, X, Y, Z],
             reference=max_grad_op,
         )
-        self.assertDeviceChecks(dc, op, inputs, [0, 1, 2])
-
-    @given(n=st.integers(4, 5), m=st.integers(6, 7),
-           d=st.integers(2, 3), **hu.gcs)
-    def test_elementwise_min(self, n, m, d, gc, dc):
-        X = np.random.rand(n, m, d).astype(np.float32)
-        Y = np.random.rand(n, m, d).astype(np.float32)
-        Z = np.random.rand(n, m, d).astype(np.float32)
-        inputs = [X, Y, Z]
-
-        def min_op(X, Y, Z):
-            return [np.minimum(np.minimum(X, Y), Z)]
-
-        op = core.CreateOperator(
-            "Min",
-            ["X", "Y", "Z"],
-            ["mx"]
-        )
-
-        self.assertReferenceChecks(
-            device_option=gc,
-            op=op,
-            inputs=inputs,
-            reference=min_op,
-        )
-        self.assertDeviceChecks(dc, op, inputs, [0])
-
-    @given(n=st.integers(4, 5), m=st.integers(6, 7),
-           d=st.integers(2, 3), **hu.gcs)
-    def test_elementwise_min_grad(self, n, m, d, gc, dc):
-        go = np.random.rand(n, m, d).astype(np.float32)
-        X = np.random.rand(n, m, d).astype(np.float32)
-        Y = np.random.rand(n, m, d).astype(np.float32)
-        Z = np.random.rand(n, m, d).astype(np.float32)
-        mx = np.minimum(np.minimum(X, Y), Z)
-        inputs = [mx, go, X, Y, Z]
-
-        def min_grad_op(mx, go, X, Y, Z):
-            def mx_grad(a):
-                return go * (mx == a)
-
-            return [mx_grad(a) for a in [X, Y, Z]]
-
-        op = core.CreateOperator(
-            "MinGradient",
-            ["mx", "go", "X", "Y", "Z"],
-            ["gX", "gY", "gZ"]
-        )
-
-        self.assertReferenceChecks(
-            device_option=gc,
-            op=op,
-            inputs=inputs,
-            reference=min_grad_op,
-        )
-        self.assertDeviceChecks(dc, op, inputs, [0, 1, 2])
 
     @given(
         inputs=hu.lengths_tensor().flatmap(
@@ -328,51 +263,3 @@ class TestUtilityOps(hu.HypothesisTestCase):
             workspace.RunOperatorOnce(op)
             Y = workspace.FetchBlob('Y')
             np.testing.assert_array_equal(X, Y)
-
-    @given(**hu.gcs)
-    def test_range(self, gc, dc):
-        names = [
-            ('stop_',),
-            ('start_', 'stop_'),
-            ('start_', 'stop_', 'step_'),
-        ]
-        # Most random values aren't great here, so use a fixed set instead of
-        # hypothesis.
-        for inputs in (
-            (10,),
-            (np.float32(10.0),),
-            (0,),
-            (0, 0),
-            (10., 5.0, -1.),
-            (2, 10000),
-            (2, 10000, 20000),
-            (2, 10000, -1),
-        ):
-            inputs = [np.array(v) for v in inputs]
-            op = core.CreateOperator(
-                "Range",
-                names[len(inputs) - 1],
-                ["Y"]
-            )
-
-            self.assertReferenceChecks(
-                device_option=gc,
-                op=op,
-                inputs=inputs,
-                reference=lambda *x: [np.arange(*x)],
-            )
-            self.assertDeviceChecks(dc, op, inputs, [0])
-
-        with self.assertRaisesRegexp(RuntimeError, 'Step size cannot be 0'):
-            inputs = (np.array(0), np.array(10), np.array(0))
-            op = core.CreateOperator(
-                "Range",
-                names[len(inputs) - 1],
-                ["Y"]
-            )
-            self.assertReferenceChecks(
-                device_option=gc,
-                op=op,
-                inputs=inputs,
-                reference=lambda *x: [np.arange(*x)],
-            )

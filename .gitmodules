@@ -4,6 +4,9 @@
 [submodule "third_party/nccl"]
 	path = third_party/nccl
 	url = https://github.com/nvidia/nccl.git
+[submodule "third_party/cnmem"]
+	path = third_party/cnmem
+	url = https://github.com/nvidia/cnmem.git
 [submodule "third_party/cub"]
 	path = third_party/cub
 	url = https://github.com/NVlabs/cub.git
@@ -22,6 +25,9 @@
 [submodule "third_party/protobuf"]
 	path = third_party/protobuf
 	url = https://github.com/google/protobuf.git
+[submodule "third_party/android-cmake"]
+	path = third_party/android-cmake
+	url = https://github.com/taka-no-me/android-cmake.git
 [submodule "third_party/ios-cmake"]
 	path = third_party/ios-cmake
 	url = https://github.com/Yangqing/ios-cmake.git
@@ -32,38 +38,14 @@
 	path = third_party/gloo
 	url = https://github.com/facebookincubator/gloo
 [submodule "third_party/NNPACK_deps/pthreadpool"]
-	path = third_party/pthreadpool
+	path = third_party/NNPACK_deps/pthreadpool
 	url = https://github.com/Maratyszcza/pthreadpool.git
 [submodule "third_party/NNPACK_deps/FXdiv"]
-	path = third_party/FXdiv
+	path = third_party/NNPACK_deps/FXdiv
 	url = https://github.com/Maratyszcza/FXdiv.git
 [submodule "third_party/NNPACK_deps/FP16"]
-	path = third_party/FP16
+	path = third_party/NNPACK_deps/FP16
 	url = https://github.com/Maratyszcza/FP16.git
 [submodule "third_party/NNPACK_deps/psimd"]
-	path = third_party/psimd
+	path = third_party/NNPACK_deps/psimd
 	url = https://github.com/Maratyszcza/psimd.git
-[submodule "third_party/aten"]
-	path = third_party/aten
-	url = https://github.com/zdevito/aten
-[submodule "third_party/zstd"]
-	path = third_party/zstd
-	url = https://github.com/facebook/zstd.git
-[submodule "third-party/cpuinfo"]
-	path = third_party/cpuinfo
-	url = https://github.com/Maratyszcza/cpuinfo.git
-[submodule "third_party/python-enum"]
-	path = third_party/python-enum
-	url = https://github.com/PeachPy/enum34.git
-[submodule "third_party/python-peachpy"]
-	path = third_party/python-peachpy
-	url = https://github.com/Maratyszcza/PeachPy.git
-[submodule "third_party/python-six"]
-	path = third_party/python-six
-	url = https://github.com/benjaminp/six.git
-[submodule "third_party/ComputeLibrary"]
-	path = third_party/ComputeLibrary
-	url = https://github.com/ARM-software/ComputeLibrary.git
-[submodule "third_party/onnx"]
-	path = third_party/onnx
-	url = https://github.com/onnx/onnx.git

@@ -17,7 +17,7 @@ TEST(LoggingTest, TestEnforceFalse) {
     CAFFE_ENFORCE(false, "This throws.");
     // This should never be triggered.
     ADD_FAILURE();
-  } catch (const EnforceNotMet&) {
+  } catch (const EnforceNotMet& err) {
   }
   std::swap(FLAGS_caffe2_use_fatal_for_enforce, kFalse);
 }
@@ -48,7 +48,7 @@ TEST(LoggingTest, EnforceShowcase) {
 #define WRAP_AND_PRINT(exp)                     \
   try {                                         \
     exp;                                        \
-  } catch (const EnforceNotMet&) {              \
+  } catch (const EnforceNotMet& err) {          \
     /* EnforceNotMet already does LOG(ERROR) */ \
   }
   WRAP_AND_PRINT(CAFFE_ENFORCE_EQ(one, two));

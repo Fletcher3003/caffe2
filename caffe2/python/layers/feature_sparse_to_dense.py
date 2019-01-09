@@ -13,6 +13,7 @@ import numpy as np
 
 
 class FeatureSparseToDense(ModelLayer):
+    _known_types = ['FLOAT', 'ID_LIST']
 
     def __init__(self, model, input_record, input_specs,
                  name='feature_sparse_to_dense', **kwargs):
@@ -84,31 +85,6 @@ class FeatureSparseToDense(ModelLayer):
                          schema.Scalar(np.float32,
                                        self.get_next_blob_reference(
                                            field + '_scores')
-                                       ),
-                         )
-                    )
-                ))
-            elif feature_specs.feature_type == 'EMBEDDING':
-                # We don't know dimensions of embeddings in input data.
-                # Even though they should match dimensions from feature config,
-                # we keep ranges blob to check input data later.
-                outputs.append((
-                    field,
-                    schema.Struct(
-                        ('ranges',
-                            schema.Scalar(
-                                (
-                                    np.int32,
-                                    (len(feature_specs.feature_ids), 2)
-                                ),
-                                self.get_next_blob_reference(
-                                    field + '_ranges')
-                            ),
-                         ),
-                        ('values',
-                         schema.Scalar(np.float32,
-                                       self.get_next_blob_reference(
-                                           field + '_values')
                                        ),
                          )
                     )
@@ -200,28 +176,6 @@ class FeatureSparseToDense(ModelLayer):
                           self.output_schema[field].ids())
                 net.Alias(record[field].values.values(),
                           self.output_schema[field].scores())
-            elif feature_specs.feature_type == 'EMBEDDING':
-                ranges = net.LengthsToRanges(
-                    record[field].values.lengths(),
-                    net.NextScopedBlob('embeddings_ranges')
-                )
-                net.SparseToDenseMask(
-                    [
-                        record[field].keys(),
-                        ranges,
-                        self.zero_range,
-                        record[field].lengths()
-                    ],
-                    self.output_schema[field].ranges(),
-                    mask=feature_specs.feature_ids,
-                )
-                # Alias helps to enforce the fact that all SparseToDense calls
-                # produce new blobs.
-                # Reusing blob names might result in some weird consequences
-                # during the delivery time, when content of the blobs is
-                # generated based on the inputSpecs.
-                net.Alias(record[field].values.items(),
-                          self.output_schema[field].values())
 
     def get_metadata(self):
         metadata = []

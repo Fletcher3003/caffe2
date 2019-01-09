@@ -65,7 +65,7 @@ NAIVE_FUNCTOR(GT, NAIVE_GT, NumericTypes, FixedType<bool>);
 NAIVE_FUNCTOR(GE, NAIVE_GE, NumericTypes, FixedType<bool>);
 #undef NAIVE_GE
 #define NAIVE_EQ(x, y) ((x) == (y))
-NAIVE_FUNCTOR(EQ, NAIVE_EQ, IntBoolTypes, FixedType<bool>);
+NAIVE_FUNCTOR(EQ, NAIVE_EQ, IntTypes, FixedType<bool>);
 #undef NAIVE_EQ
 #define NAIVE_AND(x, y) ((x) & (y))
 NAIVE_FUNCTOR(And, NAIVE_AND, BoolTypes, FixedType<bool>);
@@ -145,8 +145,28 @@ bool SumReduceLikeOp<CPUContext>::DoRunWithType() {
     auto count = A.size();
     SRLHelper::sum2one<T>(Adata, Cdata, count);
   } else {
-    size_t pre, n, post;
-    std::tie(pre, n, post) = calculate_broadcast_sizes(A, B, axis_);
+    CAFFE_ENFORCE_GT(
+        A.ndim(),
+        B.ndim(),
+        "If you are doing ReduceSumLike, input1 should have "
+        "a smaller number of dimensions.");
+    const int axis = (axis_ == -1 ? A.ndim() - B.ndim() : axis_);
+    CAFFE_ENFORCE(
+        axis >= 0 && axis < A.ndim(),
+        "ReduceSum axis should be in the range of the number "
+        "of dimensions of the first input.");
+    size_t pre = 1, n = 1, post = 1;
+    for (int i = 0; i < axis; ++i) {
+      pre *= A.dim(i);
+    }
+    for (int i = 0; i < B.ndim(); ++i) {
+      CAFFE_ENFORCE_EQ(
+          A.dim(i + axis), B.dim(i), "Broadcast dimension mismatch.");
+      n *= B.dim(i);
+    }
+    for (int i = axis + B.ndim(); i < A.ndim(); ++i) {
+      post *= A.dim(i);
+    }
     if (post == 1) {
       SRLHelper::RunWithBroadcastFront<T>(Adata, Cdata, pre, n, &context_);
     } else if (pre == 1) {

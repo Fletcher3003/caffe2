@@ -5,23 +5,20 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
-from collections import namedtuple, OrderedDict, defaultdict
+from collections import namedtuple, OrderedDict
 from past.builtins import basestring
 from future.utils import viewitems, viewkeys, viewvalues
 from itertools import chain
 from six import binary_type, string_types, text_type
 
 from caffe2.proto import caffe2_pb2
+from collections import defaultdict
 from caffe2.python import scope, utils, workspace
-from caffe2.python.control_ops_grad import \
-    gen_do_gradient, gen_if_gradient, gen_while_gradient
-
 import caffe2.python._import_c_extension as C
+import google.protobuf.text_format as protobuftx
 import pickle
 import numpy as np
 import sys
-import traceback
-import os
 
 # Mac os specific message
 if (sys.platform == 'darwin' and 'leveldb' in C.registered_dbs()):
@@ -73,35 +70,20 @@ def GetGlobalInitArgs():
 
 
 def IsOperator(op_type):
-    return IsOperatorWithEngine(op_type, engine='DEFAULT')
+    return (op_type in _REGISTERED_OPERATORS)
 
 
 def IsOperatorWithEngine(op_type, engine):
-    return C.op_registry_key(op_type, engine) in _REGISTERED_OPERATORS
+    return (op_type + "_ENGINE_" + engine in _REGISTERED_OPERATORS)
 
 
-def DeviceOption(device_type, cuda_gpu_id=0, random_seed=None, node_name=None):
+def DeviceOption(device_type, cuda_gpu_id=0, random_seed=None):
     option = caffe2_pb2.DeviceOption()
     option.device_type = device_type
     option.cuda_gpu_id = cuda_gpu_id
-    if node_name is not None:
-        option.node_name = node_name
     if random_seed is not None:
         option.random_seed = random_seed
     return option
-
-
-def device_option_equal(opt1, opt2, ignore_node_name=True, ignore_random_seed=True):
-    if not opt1 or not opt2:
-        return opt1 == opt2
-    if not ignore_node_name and opt1.node_name != opt2.node_name:
-        return False
-    if not ignore_random_seed and opt1.random_seed != opt2.random_seed:
-        return False
-    if not opt1.device_type or not opt2.device_type:
-        # At least one option is for CPU, check if both are for CPU.
-        return not opt1.device_type and not opt2.device_type
-    return opt1.cuda_gpu_id == opt2.cuda_gpu_id
 
 
 def InferBlobDevices(net):
@@ -133,13 +115,6 @@ def InferOpBlobDevices(op):
         device_option.ParseFromString(dev_str)
         output_info.append(device_option)
     return input_info, output_info
-
-
-def InferOpDeviceAsBlobDevices(op):
-    op_dev = op.device_option if op.device_option else caffe2_pb2.DeviceOption()
-    input_dev = [op_dev] * len(op.input)
-    output_dev = [op_dev] * len(op.output)
-    return input_dev, output_dev
 
 
 GradientSlice = namedtuple('GradientSlice', ['indices', 'values'])
@@ -315,10 +290,6 @@ def CreateOperator(
     registered with Caffe2.
     """
     operator = caffe2_pb2.OperatorDef()
-    if (os.environ.get('CAFFE2_DEBUG')):
-        stack = traceback.format_stack()
-        operator.debug_info = "".join(stack[:-1])
-
     operator.type = operator_type
     operator.name = name
     # Add rectified inputs and outputs
@@ -342,7 +313,6 @@ def CreateOperator(
         operator.engine = engine
     # random seed is defined in the device option, so we need to do special
     # care.
-
     if 'random_seed' in kwargs:
         operator.device_option.random_seed = kwargs['random_seed']
         del kwargs['random_seed']
@@ -463,7 +433,7 @@ class IR(object):
         for op in operators:
             if op.type == 'StopGradient':
                 if op.output[0] not in self.input_usages:
-                    raise ValueError("""StopGradient's output '{}' is orphan.
+                    raise Exception("""StopGradient's output '{}' is orphan.
 You typically want to specify same input and output for
 StopGradient. Op:\n\n{}""".format(op.output[0], str(op)))
 
@@ -831,9 +801,8 @@ StopGradient. Op:\n\n{}""".format(op.output[0], str(op)))
 
         # Check if all grad op device options are the same.
         if len(all_device_options) >= 2 and not all(
-                device_option_equal(d, all_device_options[0])
-                for d in all_device_options[1:]):
-            raise RuntimeError('Unexpected behavior: not all grad ops '
+                d == all_device_options[0] for d in all_device_options[1:]):
+            raise RuntimeError('Unexpected behavior: not all grad ops'
                                'have the same device option.')
         return True
 
@@ -897,7 +866,6 @@ StopGradient. Op:\n\n{}""".format(op.output[0], str(op)))
     def _GetInitGradients(self, ys):
         input_to_grad = {}
         gradient_ops = []
-
         for y, g in viewitems(ys):
             autograd_op = None
             if g is None:
@@ -1076,8 +1044,8 @@ class GradientRegistry(object):
                 )
             else:
                 raise Exception(
-                    "Exception when creating gradient for [{}]:{}.\nOp: \n{}".
-                    format(op.type, e, str(op))
+                    "Exception when creating the gradient for [{}]: {}.".
+                    format(op.type, e)
                 )
 
         if gradient_ops is None:
@@ -1105,11 +1073,6 @@ class GradientRegistry(object):
         """
         ir = IR(operators)
         return ir.GetBackwardPass(ys)
-
-
-GradientRegistry.RegisterGradient('Do')(gen_do_gradient)
-GradientRegistry.RegisterGradient('If')(gen_if_gradient)
-GradientRegistry.RegisterGradient('While')(gen_while_gradient)
 
 
 def get_ssa(net, blob_versions=None):
@@ -1229,40 +1192,23 @@ def recurrent_network_op_remap(op, prefix, blob_remap):
             remap_proto(argument, blob_remap)
 
 
-def control_op_remap(op, prefix, blob_remap):
-    net_arg_names = []
-    if op.type == "If":
-        net_arg_names = ['then_net', 'else_net']
-    else:
-        net_arg_names = ['loop_net', 'cond_net']
-    for argument in op.arg:
-        if argument.name in net_arg_names:
-            assert argument.n, \
-                "Expected non empty net in " + op.type + "'s " + argument.name + " argument"
-            subnet = Net(argument.n)
-            remapped_subnet = subnet.Clone(
-                name=(subnet._net.name if subnet._net.name else '') + '_remapped',
-                blob_remap=blob_remap)
-            argument.n.CopyFrom(remapped_subnet.Proto())
-
-
 DEFAULT_REMAP_FUNCS = {
     'RecurrentNetwork': recurrent_network_op_remap,
     'RecurrentNetworkGradient': recurrent_network_op_remap,
-    'If': control_op_remap,
-    'While': control_op_remap,
 }
 
 
 def remap_proto(argument, blob_remap):
-    subnet = Net(argument.n)
+    proto = caffe2_pb2.NetDef()
+    protobuftx.Merge(argument.s.decode('utf-8'), proto)
+    subnet = Net(proto)
 
     cloned_sub_net = subnet.Clone(
         'cloned_sub_net',
         blob_remap,
     )
 
-    argument.n.CopyFrom(cloned_sub_net.Proto())
+    argument.s = str(cloned_sub_net.Proto()).encode('utf-8')
 
 
 def clone_and_bind_net(net, name, prefix, blob_remap=None, inputs=None,
@@ -1522,8 +1468,6 @@ class Net(object):
             return do_set(self.GivenTensorInt64Fill)
         elif array.dtype == np.str:
             return do_set(self.GivenTensorStringFill)
-        elif array.dtype == np.bool:
-            return do_set(self.GivenTensorBoolFill)
         else:
             return do_set(self.GivenTensorFill)
 
@@ -1548,20 +1492,6 @@ class Net(object):
                 if input == blob_name:
                     return True
         return blob_name in self._external_input_map
-
-    def UsedBlobNames(self):
-        """
-        Returns a set of blob names used in the net
-        """
-        blob_names = set()
-        for op in self._net.op:
-            blob_names |= set(op.input)
-            blob_names |= set(op.output)
-        if self._net.external_input:
-            blob_names |= set(self._net.external_input)
-        if self._net.external_output:
-            blob_names |= set(self._net.external_output)
-        return blob_names
 
     def GetBlobRef(self, blob_name):
         """
@@ -1882,16 +1812,6 @@ class Net(object):
             * [ScopedBlobReference(b) for b in outputs]
         )
 
-    # This returns a reference to the observer
-    def AddObserver(self, observer_type):
-        return C.add_observer_to_net(self._net.name, observer_type)
-
-    def RemoveObserver(self, observer):
-        C.remove_observer_from_net(self._net.name, observer)
-
-    def NumObservers(self):
-        return C.num_observers_on_net(self._net.name)
-
     @property
     def external_inputs(self):
         return [_get_blob_ref(x) for x in self._net.external_input]
@@ -1991,7 +1911,7 @@ class Net(object):
             for op in self._net.op:
                 op.engine = "CUDNN"
     def RunAllOnMKL(self):
-        """A convenient function to run everything using MKLDNN."""
+        """A convenient function to run everything on the GPU."""
         device_option = caffe2_pb2.DeviceOption()
         device_option.device_type = caffe2_pb2.MKLDNN
         self._net.device_option.CopyFrom(device_option)
@@ -2179,21 +2099,6 @@ def device_equal(src, dst):
     return src.device_type == dst.device_type and src.cuda_gpu_id == dst.cuda_gpu_id
 
 
-def update_placeholder_op_output(op, blob_to_device):
-    '''
-    Placeholder ops (for e.g. Recv) always runs on CPU. So ensure their
-    output blobs reside on CPU.
-    '''
-    outputs = []
-    for output in op.output:
-        blob_dev = blob_to_device[output]
-        if blob_dev.device_type != caffe2_pb2.CPU:
-            output += '_cpu'
-        outputs.append(output)
-    del op.output[:]
-    op.output.extend(outputs)
-
-
 class RemapEntry:
     def __init__(self, blob, device):
         self.blob = blob
@@ -2206,8 +2111,7 @@ class RemapEntry:
         return hash(self.blob + str(self.device))
 
 
-def InjectCrossDeviceCopies(net, blob_to_device=None, blob_remap=None,
-                            placeHolderOps=None):
+def InjectCrossDeviceCopies(net, blob_to_device=None):
     '''
     Injecting Copy functions between device within a net. Users can provide
     a net with part of operators using different device_options. This method
@@ -2215,9 +2119,6 @@ def InjectCrossDeviceCopies(net, blob_to_device=None, blob_remap=None,
 
     Inputs:
       blob_to_device: If not None, it is a map of blobs and their device locations.
-      blob_remap: If not None, it is a map from a pair (blob, device) to
-                  the name of the blob in the given device. Blobs found in this
-                  map are assumed to be cached and don't need to be copied.
     Outputs:
       new_net: A new net with CopyCPUToGPU inserted with correct device option
 
@@ -2230,34 +2131,16 @@ def InjectCrossDeviceCopies(net, blob_to_device=None, blob_remap=None,
     '''
     new_net = net.Clone(net._net.name + '_cross_device', keep_schema=True)
     del new_net._net.op[:]
-    if blob_to_device is None:
-        blob_to_device = {}
+    blob_to_device = blob_to_device or {}
     # remapping of input blobs for each op.
-    if blob_remap is None:
-        blob_remap = {}
+    blob_remap = {}
     temp_remap = {}
     net_option = net._net.device_option or caffe2_pb2.DeviceOption()
 
-    # if external_inputs have device remappings generated by previous nets,
-    # then add those remappings as external inputs as well.
-    all_remaps = defaultdict(list)
-    for entry, mapped_blob in blob_remap.items():
-        all_remaps[entry.blob].append(mapped_blob)
-    mapped_external_inputs = []
-    for input in new_net._net.external_input:
-        mapped_external_inputs.extend(all_remaps.get(input) or [])
-    new_net._net.external_input.extend(mapped_external_inputs)
-
     for op in net._net.op:
         temp_remap.clear()
-        # Get where inputs and outputs should be. If it is a Placeholder
-        # (i.e. fake) op, then set op's device as blob's devices.
-        input_dev = None
-        output_dev = None
-        if placeHolderOps is not None and op.type in placeHolderOps:
-            input_dev, output_dev = InferOpDeviceAsBlobDevices(op)
-        else:
-            input_dev, output_dev = InferOpBlobDevices(op)
+        # Get where inputs and outputs should be
+        input_dev, output_dev = InferOpBlobDevices(op)
 
         for dev, input in zip(input_dev, op.input):
             assert net.BlobIsDefined(input), \
@@ -2302,42 +2185,28 @@ def InjectCrossDeviceCopies(net, blob_to_device=None, blob_remap=None,
                     temp_remap[input] = new_name
                     blob_to_device[new_name] = dev
 
-        if placeHolderOps is not None and op.type in placeHolderOps:
-            update_placeholder_op_output(op, blob_to_device)
-
         # Enforcing no reuse blob between operators. In-place blob usage in an
         # op is allowed. This is based on the assumption that in-place op has
         # same device info
-        for dev, output in zip(output_dev, op.output):
-            if output in blob_to_device and (
-                output not in op.input and
-                not device_equal(blob_to_device[output], dev)
+        for out_blob, device in zip(op.output, output_dev):
+            if out_blob in blob_to_device and (
+                out_blob not in op.input and
+                not device_equal(blob_to_device[out_blob], device)
             ):
                 raise RuntimeError(
                     "In-place blob: {} is not supported between operators "
                     "with different device option previous:{} now: {}. "
                     "Failed op:\n {}".format(
-                        output, blob_to_device[output], dev, op
+                        out_blob, blob_to_device[out_blob], device, op
                     )
                 )
+        blob_to_device.update({o: d for d, o in zip(output_dev, op.output)})
         new_op = caffe2_pb2.OperatorDef()
         new_op.CopyFrom(op)
 
         new_list = [temp_remap.get(b, b) for b in new_op.input]
         del new_op.input[:]
         new_op.input.extend(new_list)
-
-        # keep inplace blobs inplace
-        original_inputs = list(op.input)
-        for i, out in enumerate(new_op.output):
-            try:
-                input_idx = original_inputs.index(out)
-                new_op.output[i] = new_op.input[input_idx]
-            except ValueError:
-                pass
-
-        blob_to_device.update(
-            {o: d for d, o in zip(output_dev, new_op.output)})
         new_net.extend_ops([new_op])
 
     return new_net, blob_to_device
@@ -2363,14 +2232,11 @@ def InjectDeviceCopiesAmongNets(nets, blob_to_device_init=None):
         "nets {} should be a list of nets.".format(str(nets))
     # A holistic blob to device mapping.
     blob_to_device = blob_to_device_init or {}
-    blob_remap = {}
     new_nets = []
 
     for net in nets:
         new_net, blob_to_device = InjectCrossDeviceCopies(
-            net,
-            blob_to_device=blob_to_device,
-            blob_remap=blob_remap,
+            net, blob_to_device=blob_to_device
         )
         new_nets.append(new_net)
 
@@ -2560,57 +2426,6 @@ class ExecutionStep(object):
             for attr in net.get_attributes(name)
         ]
 
-    @classmethod
-    def create_from_proto(cls, step_proto, net_obj_dict, net_proto_dict):
-        """
-        Create ExecutionStep from ExecutionStep protobuf recursively
-        """
-        assert isinstance(step_proto, caffe2_pb2.ExecutionStep)
-        assert (len(step_proto.network) > 0 and len(step_proto.substep) == 0) or \
-            (len(step_proto.network) == 0 and len(step_proto.substep) > 0)
-
-        steps_or_nets = []
-        if len(step_proto.substep) > 0:
-            for substep_proto in step_proto.substep:
-                steps_or_nets.append(ExecutionStep.create_from_proto(
-                    substep_proto, net_obj_dict, net_proto_dict))
-        else:
-            for net_name in step_proto.network:
-                if net_name not in net_obj_dict:
-                    assert net_name in net_proto_dict
-                    net = Net(net_proto_dict[net_name])
-                    net_obj_dict[net_name] = net
-                net = net_obj_dict[net_name]
-                assert isinstance(net, Net)
-                steps_or_nets.append(net)
-
-        num_iter = step_proto.num_iter if step_proto.HasField('num_iter') else None
-        concurrent_substeps = step_proto.concurrent_substeps if\
-            step_proto.HasField('concurrent_substeps') else None
-        should_stop_blob = BlobReference(step_proto.should_stop_blob) if\
-            step_proto.HasField('should_stop_blob') else None
-        only_once = step_proto.only_once if\
-            step_proto.HasField('only_once') else None
-        num_concurrent_instances = step_proto.num_concurrent_instances if\
-            step_proto.HasField('num_concurrent_instances') else None
-        create_workspace = step_proto.create_workspace if\
-            step_proto.HasField('create_workspace') else None
-        run_every_ms = step_proto.run_every_ms if\
-            step_proto.HasField('run_every_ms') else None
-
-        return execution_step(
-            step_proto.name,
-            steps_or_nets,
-            num_iter=num_iter,
-            report_net=None,        # DEPRECATED
-            report_interval=None,   # DEPRECATED
-            concurrent_substeps=concurrent_substeps,
-            should_stop_blob=should_stop_blob,
-            only_once=only_once,
-            num_concurrent_instances=num_concurrent_instances,
-            create_workspace=create_workspace,
-            run_every_ms=run_every_ms)
-
 
 def add_nets_in_order(step, net_list):
     proto = step.Proto()
@@ -2631,7 +2446,6 @@ class Plan(object):
     def __init__(self, name_or_step):
         self._plan = caffe2_pb2.PlanDef()
         self._net_dict = OrderedDict()
-        self._steps = []    # A list of ExecutionStep
         if isinstance(name_or_step, ExecutionStep):
             self._plan.name = name_or_step.Name()
             self.AddStep(name_or_step)
@@ -2661,14 +2475,10 @@ class Plan(object):
         if not step.HasNets() and not step.HasSubsteps():
             return
         self._plan.execution_step.add().CopyFrom(step.Proto())
-        self._steps.append(step)
         # nets need to be added to the plan in order of usage
         net_list = []
         add_nets_in_order(step, net_list)
         self.AddNets([step.get_net(n) for n in net_list])
-
-    def Steps(self):
-        return self._steps
 
     def get_all_attributes(self, name):
         """
@@ -2680,25 +2490,6 @@ class Plan(object):
             for net in viewvalues(self._net_dict)
             for attr in net.get_attributes(name)
         ]
-
-    @classmethod
-    def create_from_proto(cls, plan_proto):
-        assert isinstance(plan_proto, caffe2_pb2.PlanDef)
-        plan = Plan(plan_proto.name)
-        plan._plan.CopyFrom(plan_proto)
-
-        net_obj_dict = {}
-        net_proto_dict = {}
-        for net_proto in plan_proto.network:
-            assert net_proto.name not in net_proto_dict
-            net_proto_dict[net_proto.name] = net_proto
-
-        for step_proto in plan_proto.execution_step:
-            step = ExecutionStep.create_from_proto(
-                step_proto, net_obj_dict, net_proto_dict)
-            plan.AddStep(step)
-
-        return plan
 
 
 def to_execution_step(step_or_nets, default_name=None):
@@ -2725,8 +2516,7 @@ def execution_step(default_name,
                    should_stop_blob=None,
                    only_once=None,
                    num_concurrent_instances=None,
-                   create_workspace=False,
-                   run_every_ms=None):
+                   create_workspace=False):
     """
     Helper for creating an ExecutionStep.
     - steps_or_nets can be:
@@ -2762,8 +2552,6 @@ def execution_step(default_name,
         step.SetNumConcurrentInstances(num_concurrent_instances)
     if create_workspace:
         step.SetCreateWorkspace(True)
-    if run_every_ms:
-        step.RunEveryMillis(run_every_ms)
 
     if isinstance(steps_or_nets, ExecutionStep):
         step.AddSubstep(steps_or_nets)
@@ -2800,23 +2588,17 @@ def _extract_stacktrace():
     The reason for file system access avoidance is that
     if code is located on an NFS, file access might be slow
 
-    Function returns a list of tuples (file_name, line_number, function)
+    Function returns a list of tuples (file_name, line_number)
     '''
 
+    current_file_name = __name__.replace('.', '/') + ".py"
     result = []
-    # Ignore top 3 layers of stack: this function, _CreateAndAddToSelf, and
-    # whatever calls _CreateAndAddToSelf (either __getattr__ or Python)
-    frame = sys._getframe(3)
+    frame = sys._getframe(1)
     # We just go down the frame stack in a loop
     while frame:
-        # Its important to extract information from the frame here
-        # as frame's current line most probably will change later.
-        result.append((frame.f_code.co_filename, frame.f_lineno, frame.f_code.co_name))
+        if current_file_name not in frame.f_code.co_filename:
+            # Its important to extract information from the frame here
+            # as frame's current line most probably will change later.
+            result.append((frame.f_code.co_filename, frame.f_lineno))
         frame = frame.f_back
     return result
-
-
-SetPerOpEnginePref = C.set_per_op_engine_pref
-SetGlobalEnginePref = C.set_global_engine_pref
-SetEnginePref = C.set_engine_pref
-SetOpEnginePref = C.set_op_engine_pref

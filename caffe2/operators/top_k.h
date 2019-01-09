@@ -13,19 +13,14 @@ class TopKOp : public Operator<Context> {
   USE_OPERATOR_CONTEXT_FUNCTIONS;
 
   TopKOp(const OperatorDef& operator_def, Workspace* ws)
-      : Operator<Context>(operator_def, ws),
-        OP_SINGLE_ARG(int, "k", k_, -1),
-        OP_SINGLE_ARG(int, "axis", axis_, -1) {
+      : Operator<Context>(operator_def, ws), OP_SINGLE_ARG(int, "k", k_, -1) {
     CAFFE_ENFORCE(k_ >= 1, "k argument must be >= 1");
   }
-
-  ~TopKOp() {}
 
   bool RunOnDevice() override;
 
  private:
-  const int k_;
-  int axis_;
+  int k_;
 };
 
 template <typename T, class Context>
@@ -34,15 +29,9 @@ class TopKGradientOp : public Operator<Context> {
   USE_OPERATOR_CONTEXT_FUNCTIONS;
 
   TopKGradientOp(const OperatorDef& operator_def, Workspace* ws)
-      : Operator<Context>(operator_def, ws),
-        OP_SINGLE_ARG(int, "axis", axis_, -1) {}
-
-  ~TopKGradientOp() {}
+      : Operator<Context>(operator_def, ws) {}
 
   bool RunOnDevice() override;
-
- private:
-  int axis_;
 };
 
 } // namespace caffe2

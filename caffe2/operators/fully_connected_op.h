@@ -9,19 +9,13 @@
 namespace caffe2 {
 
 // This is Caffe's InnerProductOp, with a name that fits its purpose better.
-template <
-    class Context,
-    class Engine = DefaultEngine,
-    bool TransposeWeight = true>
+template <class Context, class Engine = DefaultEngine>
 class FullyConnectedOp final : public Operator<Context> {
  public:
   USE_OPERATOR_CONTEXT_FUNCTIONS;
   FullyConnectedOp(const OperatorDef& operator_def, Workspace* ws)
       : Operator<Context>(operator_def, ws),
-        axis_(OperatorBase::GetSingleArgument<int32_t>("axis", 1)),
-        axis_w_(OperatorBase::GetSingleArgument<int32_t>("axis_w", 1)),
-        float16_compute_(
-            OperatorBase::GetSingleArgument<bool>("float16_compute", false)) {}
+        axis_(OperatorBase::GetSingleArgument<int32_t>("axis", 1)) {}
   ~FullyConnectedOp() {}
 
   template <
@@ -35,14 +29,13 @@ class FullyConnectedOp final : public Operator<Context> {
     const auto& W = Input(1);
     const auto& b = Input(2);
     auto* Y = Output(0);
+    CAFFE_ENFORCE(W.ndim() == 2, W.ndim());
     CAFFE_ENFORCE(b.ndim() == 1, b.ndim());
     // batch size
     const auto canonical_axis = X.canonical_axis_index(axis_);
     const auto M = X.size_to_dim(canonical_axis);
     const auto K = X.size_from_dim(canonical_axis);
-    const auto canonical_axis_w = W.canonical_axis_index(axis_w_);
-    const int N = TransposeWeight ? W.size_to_dim(canonical_axis_w)
-                                  : W.size_from_dim(canonical_axis_w);
+    const int N = W.dim32(0);
 
     auto dimErrorString = [&]() {
       return MakeString(
@@ -65,7 +58,7 @@ class FullyConnectedOp final : public Operator<Context> {
 
     // Error checking
     CAFFE_ENFORCE(M == X.size() / K, dimErrorString());
-    CAFFE_ENFORCE(K == W.size() / N, dimErrorString());
+    CAFFE_ENFORCE(K == W.size() / W.dim32(0), dimErrorString());
     CAFFE_ENFORCE(N == b.dim32(0), dimErrorString());
     CAFFE_ENFORCE(N == b.size(), dimErrorString());
 
@@ -77,22 +70,10 @@ class FullyConnectedOp final : public Operator<Context> {
     Y->Resize(Y_shape_cache_);
     CAFFE_ENFORCE(M * N == Y->size(), dimErrorString());
 
-    if (X.size() == 0) {
-      // skip the rest of the computation if X is empty
-      Y->template mutable_data<T_Y>();
-      return true;
-    }
-
-    // default to FLOAT as math.h does.
-    TensorProto::DataType math_type = TensorProto_DataType_FLOAT;
-    if (fp16_type<MATH>()) {
-      math_type = TensorProto_DataType_FLOAT16;
-    }
-
     // W * x
     math::Gemm<T_X, Context, Engine>(
         CblasNoTrans,
-        TransposeWeight ? CblasTrans : CblasNoTrans,
+        CblasTrans,
         M,
         N,
         K,
@@ -101,8 +82,7 @@ class FullyConnectedOp final : public Operator<Context> {
         W.template data<T_W>(),
         0,
         Y->template mutable_data<T_Y>(),
-        &context_,
-        math_type);
+        &context_);
     // Add bias term
     if (bias_multiplier_.size() != M) {
       // If the helper bias multiplier is not M, reshape and fill it with one.
@@ -124,8 +104,7 @@ class FullyConnectedOp final : public Operator<Context> {
         b.template data<T_B>(),
         1,
         Y->template mutable_data<T_Y>(),
-        &context_,
-        math_type);
+        &context_);
     return true;
   }
 
@@ -140,28 +119,19 @@ class FullyConnectedOp final : public Operator<Context> {
 
  protected:
   size_t axis_{1};
-  size_t axis_w_{1};
   // A local vector to cache the output shape so we don't need to recreate
   // a vector object every time we run Run().
   vector<TIndex> Y_shape_cache_;
   Tensor<Context> bias_multiplier_;
-
-  bool float16_compute_;
 };
 
-template <
-    class Context,
-    class Engine = DefaultEngine,
-    bool TransposeWeight = true>
+template <class Context, class Engine = DefaultEngine>
 class FullyConnectedGradientOp : public Operator<Context> {
  public:
   USE_OPERATOR_CONTEXT_FUNCTIONS;
   FullyConnectedGradientOp(const OperatorDef& operator_def, Workspace* ws)
       : Operator<Context>(operator_def, ws),
-        axis_(OperatorBase::GetSingleArgument<int32_t>("axis", 1)),
-        axis_w_(OperatorBase::GetSingleArgument<int32_t>("axis_w", 1)),
-        float16_compute_(
-            OperatorBase::GetSingleArgument<bool>("float16_compute", false)) {}
+        axis_(OperatorBase::GetSingleArgument<int32_t>("axis", 1)) {}
   ~FullyConnectedGradientOp() {}
 
   template <
@@ -177,13 +147,12 @@ class FullyConnectedGradientOp : public Operator<Context> {
     const auto& X = Input(0);
     const auto& W = Input(1);
     const auto& dY = Input(2);
+    CAFFE_ENFORCE(W.ndim() == 2, W.ndim());
     // batch size
     const auto canonical_axis = X.canonical_axis_index(axis_);
     const int M = X.size_to_dim(canonical_axis);
     const int K = X.size_from_dim(canonical_axis);
-    const auto canonical_axis_w = W.canonical_axis_index(axis_w_);
-    const int N = TransposeWeight ? W.size_to_dim(canonical_axis_w)
-                                  : W.size_from_dim(canonical_axis_w);
+    const int N = W.dim32(0);
     CAFFE_ENFORCE(M * K == X.size());
     CAFFE_ENFORCE(K * N == W.size());
 
@@ -192,48 +161,19 @@ class FullyConnectedGradientOp : public Operator<Context> {
     dW->ResizeLike(W);
     db->Resize(N);
 
-    if (X.size() == 0) {
-      // generate a zero blob for db and dW when X is empty
-      math::Set<T_DB, Context>(
-          db->size(),
-          convert::To<float, T_DB>(0),
-          db->template mutable_data<T_DB>(),
-          &context_);
-      math::Set<T_DW, Context>(
-          dW->size(),
-          convert::To<float, T_DW>(0),
-          dW->template mutable_data<T_DW>(),
-          &context_);
-
-      if (OutputSize() == 3) {
-        auto* dX = Output(2);
-        dX->ResizeLike(X);
-        dX->template mutable_data<T_DX>();
-      }
-
-      return true;
-    }
-
-    // default to FLOAT as math.h does.
-    TensorProto::DataType math_type = TensorProto_DataType_FLOAT;
-    if (fp16_type<MATH>()) {
-      math_type = TensorProto_DataType_FLOAT16;
-    }
-
     // Compute dW
     math::Gemm<T_DY, Context, Engine>(
         CblasTrans,
         CblasNoTrans,
-        TransposeWeight ? N : K,
-        TransposeWeight ? K : N,
+        N,
+        K,
         M,
-        1,
-        TransposeWeight ? dY.template data<T_DY>() : X.template data<T_X>(),
-        TransposeWeight ? X.template data<T_X>() : dY.template data<T_DY>(),
-        0,
+        convert::To<float, MATH>(1),
+        dY.template data<T_DY>(),
+        X.template data<T_X>(),
+        convert::To<float, MATH>(0),
         dW->template mutable_data<T_DW>(),
-        &context_,
-        math_type);
+        &context_);
     if (bias_multiplier_.size() != M) {
       // If the helper bias multiplier is not M, reshape and fill it
       // with one.
@@ -249,10 +189,10 @@ class FullyConnectedGradientOp : public Operator<Context> {
         CblasTrans,
         M,
         N,
-        1,
+        convert::To<float, MATH>(1),
         dY.template data<T_DY>(),
         bias_multiplier_.template data<T_B>(),
-        0,
+        convert::To<float, MATH>(0),
         db->template mutable_data<T_DB>(),
         &context_);
 
@@ -262,17 +202,16 @@ class FullyConnectedGradientOp : public Operator<Context> {
       dX->ResizeLike(X);
       math::Gemm<T_DX, Context, Engine>(
           CblasNoTrans,
-          TransposeWeight ? CblasNoTrans : CblasTrans,
+          CblasNoTrans,
           M,
           K,
           N,
-          1,
+          convert::To<float, MATH>(1),
           dY.template data<T_DY>(),
           W.template data<T_W>(),
-          0,
+          convert::To<float, MATH>(0),
           dX->template mutable_data<T_DX>(),
-          &context_,
-          math_type);
+          &context_);
     }
     return true;
   }
@@ -291,9 +230,7 @@ class FullyConnectedGradientOp : public Operator<Context> {
 
  protected:
   size_t axis_{1};
-  size_t axis_w_{1};
   Tensor<Context> bias_multiplier_;
-  bool float16_compute_;
 };
 
 } // namespace caffe2

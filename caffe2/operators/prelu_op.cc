@@ -1,8 +1,7 @@
 #include "caffe2/operators/prelu_op.h"
-#include "caffe2/utils/math.h"
 
-#include "caffe2/core/types.h"
 #include "caffe2/utils/cpu_neon.h"
+#include "caffe2/utils/math.h"
 
 namespace caffe2 {
 
@@ -274,8 +273,7 @@ output data (Tensor<T>) where the function `f(x) = slope * x for x < 0`,
         "Slope",
         "1D slope tensor. If `Slope` is of size 1, the value is shared"
         "across different channels")
-    .Output(0, "Y", "1D input tensor")
-    .InheritOnnxSchema("PRelu");
+    .Output(0, "Y", "1D input tensor");
 
 // Input: Y, dY, output: dX
 OPERATOR_SCHEMA(PReluGradient).NumInputs(4).NumOutputs(2).SetDoc(R"DOC(

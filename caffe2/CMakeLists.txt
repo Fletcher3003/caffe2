@@ -1,5 +1,16 @@
 # ---[ Declare source file lists
 
+# Caffe2_{CPU,GPU}_SRCS is the list that will have all the related source
+# files for CPU and GPU respectively. They will be filled with the
+# CMakeLists.txt files under each folder respectively.
+set(Caffe2_CPU_SRCS)
+set(Caffe2_GPU_SRCS)
+
+# Caffe2_{CPU,GPU}_TEST_SRCS is the list that will have all the related source
+# files for CPU and GPU tests respectively.
+set(Caffe2_CPU_TEST_SRCS)
+set(Caffe2_GPU_TEST_SRCS)
+
 # ---[ Add respective subdirectories
 # Note: the folders that are being commented out have not been properly
 # addressed yet.
@@ -8,7 +19,6 @@ add_subdirectory(proto)
 
 add_subdirectory(contrib)
 add_subdirectory(core)
-add_subdirectory(core/nomnigraph)
 add_subdirectory(cuda_rtc)
 add_subdirectory(db)
 add_subdirectory(distributed)
@@ -16,17 +26,12 @@ add_subdirectory(distributed)
 add_subdirectory(image)
 add_subdirectory(video)
 add_subdirectory(mkl)
-add_subdirectory(mobile)
 add_subdirectory(mpi)
-add_subdirectory(observers)
-add_subdirectory(onnx)
 add_subdirectory(operators)
-add_subdirectory(operators/rnn)
 add_subdirectory(perfkernels)
 add_subdirectory(python)
 add_subdirectory(queue)
 add_subdirectory(sgd)
-add_subdirectory(share)
 # add_subdirectory(test) # todo: use caffe2_gtest_main instead of gtest_main because we will need to call GlobalInit
 add_subdirectory(transforms)
 add_subdirectory(utils)
@@ -62,97 +67,70 @@ if (FALSE)
   endforeach()
 endif()
 
-# ---[ Generate and install header files.
+# ---[ List of libraries to link with
+
+# In the static linking + clang mode, cmake will fail to identify the build
+# order because the lib becomes one single string -Wl,-force-load,libCaffe2_CPU.so
+# As a result, we will create a Caffe2_MAIN_LIBS_ORDER variable simply to
+# enforce the dependency.
+set(Caffe2_MAIN_LIBS_ORDER ${Caffe2_MAIN_LIBS})
+
+# Compile exposed libraries.
+add_library(Caffe2_CPU ${Caffe2_CPU_SRCS} $<TARGET_OBJECTS:Caffe_PROTO> $<TARGET_OBJECTS:Caffe2_PROTO>)
+target_link_libraries(Caffe2_CPU ${Caffe2_DEPENDENCY_LIBS})
+install(TARGETS Caffe2_CPU DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
+list(APPEND Caffe2_MAIN_LIBS_ORDER Caffe2_CPU)
+if (BUILD_SHARED_LIBS)
+  list(APPEND Caffe2_MAIN_LIBS Caffe2_CPU)
+else()
+  caffe_add_whole_archive_flag(Caffe2_CPU tmp)
+  list(APPEND Caffe2_MAIN_LIBS ${tmp})
+endif()
+if (Caffe2_EXTERNAL_DEPENDENCIES)
+  add_dependencies(Caffe2_CPU ${Caffe2_EXTERNAL_DEPENDENCIES})
+endif()
 
 # Write the macros file.
-configure_file(
-    ${PROJECT_SOURCE_DIR}/caffe2/core/macros.h.in
-    ${PROJECT_BINARY_DIR}/caffe2/core/macros.h)
+file(MAKE_DIRECTORY ${PROJECT_BINARY_DIR}/caffe2/core)
+file(WRITE ${PROJECT_BINARY_DIR}/caffe2/core/macros.h
+     "// Automatically generated header file for caffe2 macros. These \n"
+     "// macros are used to build the Caffe2 binary, and if you are \n"
+     "// building a dependent library, they will need to be set as well \n"
+     "// for your program to link correctly.\n\n"
+     "#pragma once\n\n")
+get_directory_property(tmp DIRECTORY ${PROJECT_SOURCE_DIR} COMPILE_DEFINITIONS)
+foreach(item ${tmp})
+  if (${item} MATCHES "CAFFE2.*")
+    file(APPEND ${PROJECT_BINARY_DIR}/caffe2/core/macros.h
+         "\n#ifndef ${item}\n#define ${item}\n#endif // ${item}\n")
+  endif()
+endforeach()
 
 # Installing the header files
 install(DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
-        DESTINATION include
+        DESTINATION ${CMAKE_INSTALL_PREFIX}/include/
         FILES_MATCHING PATTERN "*.h")
 install(FILES ${PROJECT_BINARY_DIR}/caffe2/core/macros.h
-        DESTINATION include/caffe2/core)
-
-
-# ---[ List of libraries to link with
-add_library(caffe2_protos STATIC $<TARGET_OBJECTS:Caffe_PROTO> $<TARGET_OBJECTS:Caffe2_PROTO>)
-add_dependencies(caffe2_protos Caffe_PROTO Caffe2_PROTO)
-# If we are going to link protobuf locally inside caffe2 libraries, what we will do is
-# to create a helper static library that always contains libprotobuf source files, and
-# link the caffe2 related dependent libraries to it.
-target_include_directories(caffe2_protos INTERFACE $<INSTALL_INTERFACE:include>)
-# Reason for this public dependency is as follows:
-# (1) Strictly speaking, we should not expose any Protobuf related functions. We should
-#     only use function interfaces wrapped with our own public API, and link protobuf
-#     locally.
-# (2) However, currently across the Caffe2 codebase, we have extensive use of protobuf
-#     functionalities. For example, not only libcaffe2.so uses it, but also other
-#     binaries such as python extensions etc. As a result, we will have to have a
-#     transitive dependency to libprotobuf.
-#
-# Good thing is that, if we specify CAFFE2_LINK_LOCAL_PROTOBUF, then we do not need to
-# separately deploy protobuf binaries - libcaffe2.so will contain all functionalities
-# one needs. One can verify this via ldd.
-#
-# TODO item in the future includes:
-# (1) Enable using lite protobuf
-# (2) Properly define public API that do not directly depend on protobuf itself.
-# (3) Expose the libprotobuf.a file for dependent libraries to link to.
-#
-# What it means for users/developers?
-# (1) Users: nothing affecting the users, other than the fact that CAFFE2_LINK_LOCAL_PROTOBUF
-#     avoids the need to deploy protobuf.
-# (2) Developers: if one simply uses core caffe2 functionality without using protobuf,
-#     nothing changes. If one has a dependent library that uses protobuf, then one needs to
-#     have the right protobuf version as well as linking to libprotobuf.a.
-target_link_libraries(caffe2_protos PUBLIC protobuf::libprotobuf)
-
-# Compile exposed libraries.
-add_library(caffe2 ${Caffe2_CPU_SRCS})
-caffe2_interface_library(caffe2_protos caffe2_protos_whole)
-target_link_libraries(caffe2 PRIVATE caffe2_protos_whole)
-if (${CAFFE2_LINK_LOCAL_PROTOBUF})
-  target_link_libraries(caffe2 INTERFACE protobuf::libprotobuf)
-else()
-  target_link_libraries(caffe2 PUBLIC protobuf::libprotobuf)
-endif()
-target_link_libraries(caffe2 PUBLIC ${Caffe2_PUBLIC_DEPENDENCY_LIBS})
-target_link_libraries(caffe2 PRIVATE ${Caffe2_DEPENDENCY_LIBS})
-target_link_libraries(caffe2 PRIVATE ${Caffe2_DEPENDENCY_WHOLE_LINK_LIBS})
-target_include_directories(caffe2 INTERFACE $<INSTALL_INTERFACE:include>)
-target_compile_options(caffe2 INTERFACE "-std=c++11")
-target_compile_options(caffe2 PRIVATE "-DCAFFE2_BUILD_MAIN_LIB")
-# Use -O2 for release builds (-O3 doesn't improve perf, and -Os results in perf regression)
-target_compile_options(caffe2 PRIVATE "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>:-O2>")
-install(TARGETS caffe2 EXPORT Caffe2Targets DESTINATION lib)
-caffe2_interface_library(caffe2 caffe2_library)
-list(APPEND Caffe2_MAIN_LIBS caffe2_library)
+        DESTINATION ${CMAKE_INSTALL_PREFIX}/include/caffe2/core/)
 
 # ---[ CUDA library.
 if(USE_CUDA)
-  # A hack to deal with cuda library dependencies and modern CMake: the
-  # CUDA_ADD_LIBRARY includes a target_link_libraries, and as a result,
-  # one cannot use PUBLIC/PRIVATE/INTERFACE for the target anymore. This
-  # hack adds the PRIVATE keywords to CUDA_LIBRARIES so we can deal with
-  # it. We will then manually add the cudart library as interface libs.
-  set(__tmp ${CUDA_LIBRARIES})
-  set(CUDA_LIBRARIES PRIVATE ${CUDA_LIBRARIES})
-  CUDA_ADD_LIBRARY(caffe2_gpu ${Caffe2_GPU_SRCS})
-  set(CUDA_LIBRARIES ${__tmp})
-  target_link_libraries(caffe2_gpu INTERFACE caffe2::cudart)
-
-  target_include_directories(
-      caffe2_gpu INTERFACE $<INSTALL_INTERFACE:include>)
-  target_link_libraries(
-      caffe2_gpu PUBLIC caffe2 ${Caffe2_PUBLIC_CUDA_DEPENDENCY_LIBS})
-  target_link_libraries(
-      caffe2_gpu PRIVATE ${Caffe2_CUDA_DEPENDENCY_LIBS})
-  caffe2_interface_library(caffe2_gpu caffe2_gpu_library)
-  list(APPEND Caffe2_MAIN_LIBS caffe2_gpu_library)
-  install(TARGETS caffe2_gpu EXPORT Caffe2Targets DESTINATION lib)
+  CUDA_ADD_LIBRARY(Caffe2_GPU ${Caffe2_GPU_SRCS})
+  list(APPEND Caffe2_MAIN_LIBS_ORDER Caffe2_GPU)
+  if (BUILD_SHARED_LIBS)
+    target_link_libraries(Caffe2_GPU Caffe2_CPU ${Caffe2_DEPENDENCY_LIBS})
+    list(APPEND Caffe2_MAIN_LIBS Caffe2_GPU)
+  else()
+    target_link_libraries(Caffe2_GPU ${Caffe2_DEPENDENCY_LIBS})
+    caffe_add_whole_archive_flag(Caffe2_GPU tmp)
+    list(APPEND Caffe2_MAIN_LIBS ${tmp})
+  endif()
+  if (Caffe2_EXTERNAL_DEPENDENCIES)
+    add_dependencies(Caffe2_GPU ${Caffe2_EXTERNAL_DEPENDENCIES})
+  endif()
+  install(TARGETS Caffe2_GPU DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
+  link_directories(${CMAKE_INSTALL_PREFIX}/lib)
+  add_dependencies(Caffe2_GPU Caffe2_PROTO)
 endif()
 
 # ---[ Test binaries.
@@ -165,79 +143,72 @@ if (BUILD_TEST)
   foreach(test_src ${Caffe2_ALL_TEST_SRCS})
     get_filename_component(test_name ${test_src} NAME_WE)
     add_executable(${test_name} "${test_src}")
-    # For tests, some of the test code actually directly call the dependent
-    # libraries even if they are not part of the public dependency libs. As a
-    # result, we will explicitly link the test against the Caffe2 dependency
-    # libs.
-    target_link_libraries(${test_name} ${Caffe2_MAIN_LIBS} gtest_main)
-    if (USE_CUDA)
-      target_link_libraries(${test_name} ${Caffe2_CUDA_DEPENDENCY_LIBS})
-    endif()
+    add_dependencies(${test_name} ${Caffe2_MAIN_LIBS_ORDER})
+    target_link_libraries(${test_name} ${Caffe2_MAIN_LIBS} ${Caffe2_DEPENDENCY_LIBS} gtest_main)
     if (${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION} GREATER 3.0)
       target_compile_features(${test_name} PRIVATE cxx_range_for)
     endif()
     add_test(NAME ${test_name} COMMAND $<TARGET_FILE:${test_name}>)
-    install(TARGETS ${test_name} DESTINATION test)
+    install(TARGETS ${test_name} DESTINATION ${CMAKE_INSTALL_PREFIX}/test)
   endforeach()
 endif()
 
 
 if (BUILD_PYTHON)
-  # Python site-packages
-  # Get canonical directory for python site packages (relative to install
-  # location).  It varys from system to system.
-  pycmd(PYTHON_SITE_PACKAGES "
-      from distutils import sysconfig
-      print(sysconfig.get_python_lib(prefix=''))
-  ")
-  # ---[ Options.
-  SET(PYTHON_LIB_REL_PATH "${PYTHON_SITE_PACKAGES}" CACHE STRING "Python installation path (relative to CMake installation prefix)")
-  message(STATUS "Using ${PYTHON_LIB_REL_PATH} as python relative installation path")
-  # Python extension suffix
-  # Try to get from python through sysconfig.get_env_var('EXT_SUFFIX') first,
-  # fallback to ".pyd" if windows and ".so" for all others.
-  pycmd(PY_EXT_SUFFIX "
-      from distutils import sysconfig
-      ext_suffix = sysconfig.get_config_var('EXT_SUFFIX')
-      print(ext_suffix if ext_suffix else '')
-  ")
-  if("${PY_EXT_SUFFIX}" STREQUAL "")
-    if (MSVC)
-      set(PY_EXT_SUFFIX ".pyd")
-    else()
-      set(PY_EXT_SUFFIX ".so")
-    endif()
-  endif()
-
   # ---[ Python.
   add_library(caffe2_pybind11_state MODULE ${Caffe2_CPU_PYTHON_SRCS})
-  set_target_properties(caffe2_pybind11_state PROPERTIES COMPILE_FLAGS "-fvisibility=hidden")
+  add_dependencies(caffe2_pybind11_state ${Caffe2_MAIN_LIBS_ORDER})
   set_target_properties(caffe2_pybind11_state PROPERTIES PREFIX "")
-  set_target_properties(caffe2_pybind11_state PROPERTIES SUFFIX ${PY_EXT_SUFFIX})
   if (APPLE)
-    set_target_properties(caffe2_pybind11_state PROPERTIES LINK_FLAGS "-undefined dynamic_lookup")
+    set_target_properties(caffe2_pybind11_state PROPERTIES SUFFIX ".so")
+  elseif (MSVC)
+    set_target_properties(caffe2_pybind11_state PROPERTIES SUFFIX ".pyd")
   endif()
   set_target_properties(
       caffe2_pybind11_state PROPERTIES LIBRARY_OUTPUT_DIRECTORY
       ${CMAKE_BINARY_DIR}/caffe2/python)
   target_link_libraries(
-      caffe2_pybind11_state caffe2_library)
-  install(TARGETS caffe2_pybind11_state DESTINATION "${PYTHON_LIB_REL_PATH}/caffe2/python")
+      caffe2_pybind11_state ${Caffe2_MAIN_LIBS} ${Caffe2_DEPENDENCY_LIBS}
+      ${Caffe2_PYTHON_DEPENDENCY_LIBS})
+  # Add rpath to the python target, so that we will be able to load it. This
+  # is in order to ease the problem of anaconda's ipython DYLD bug, detailed
+  # here:
+  #     https://github.com/BVLC/caffe/issues/2720
+  #     https://github.com/ipython/ipython/issues/8878
+  if (APPLE)
+    add_custom_command(
+        TARGET caffe2_pybind11_state POST_BUILD
+        COMMAND install_name_tool -add_rpath ${CMAKE_INSTALL_PREFIX}/lib
+                $<TARGET_FILE:caffe2_pybind11_state>)
+  endif()
+  install(
+      TARGETS caffe2_pybind11_state DESTINATION
+      ${CMAKE_INSTALL_PREFIX}/caffe2/python)
 
   if(USE_CUDA)
     add_library(caffe2_pybind11_state_gpu MODULE ${Caffe2_GPU_PYTHON_SRCS})
-    set_target_properties(caffe2_pybind11_state_gpu PROPERTIES COMPILE_FLAGS "-fvisibility=hidden")
+    add_dependencies(caffe2_pybind11_state_gpu ${Caffe2_MAIN_LIBS_ORDER})
     set_target_properties(caffe2_pybind11_state_gpu PROPERTIES PREFIX "")
-    set_target_properties(caffe2_pybind11_state_gpu PROPERTIES SUFFIX ${PY_EXT_SUFFIX})
     if (APPLE)
-      set_target_properties(caffe2_pybind11_state_gpu PROPERTIES LINK_FLAGS "-undefined dynamic_lookup")
+      set_target_properties(caffe2_pybind11_state_gpu PROPERTIES SUFFIX ".so")
+    elseif (MSVC)
+      set_target_properties(caffe2_pybind11_state_gpu PROPERTIES SUFFIX ".pyd")
     endif()
     set_target_properties(
         caffe2_pybind11_state_gpu PROPERTIES LIBRARY_OUTPUT_DIRECTORY
         ${CMAKE_BINARY_DIR}/caffe2/python)
     target_link_libraries(
-        caffe2_pybind11_state_gpu caffe2_library caffe2_gpu_library)
-    install(TARGETS caffe2_pybind11_state_gpu DESTINATION "${PYTHON_LIB_REL_PATH}/caffe2/python")
+        caffe2_pybind11_state_gpu ${Caffe2_MAIN_LIBS} ${Caffe2_DEPENDENCY_LIBS}
+        ${Caffe2_PYTHON_DEPENDENCY_LIBS})
+    if (APPLE)
+      add_custom_command(
+          TARGET caffe2_pybind11_state_gpu POST_BUILD
+          COMMAND install_name_tool -add_rpath ${CMAKE_INSTALL_PREFIX}/lib
+                  $<TARGET_FILE:caffe2_pybind11_state_gpu>)
+    endif()
+    install(
+        TARGETS caffe2_pybind11_state_gpu DESTINATION
+        ${CMAKE_INSTALL_PREFIX}/caffe2/python)
   endif()
 
   if (MSVC AND CMAKE_GENERATOR MATCHES "Visual Studio")
@@ -271,7 +242,7 @@ if (BUILD_PYTHON)
   file(GLOB_RECURSE PYTHON_SRCS RELATIVE ${PROJECT_SOURCE_DIR}
        "${PROJECT_SOURCE_DIR}/caffe2/*.py")
   add_custom_target(python_copy_files ALL)
-  if(MSVC OR CMAKE_GENERATOR MATCHES "Ninja")
+  if(MSVC AND CMAKE_GENERATOR MATCHES "Ninja")
     # ninja fails when the command line is too long so we split
     # the target into several. This would be beneficial for VS also
     # since it build targets in parallel but not custom commands
@@ -296,15 +267,19 @@ if (BUILD_PYTHON)
 
   # Install commands
   # Pick up static python files
-  install(DIRECTORY ${CMAKE_BINARY_DIR}/caffe2 DESTINATION ${PYTHON_LIB_REL_PATH}
+  install(DIRECTORY ${CMAKE_BINARY_DIR}/caffe2 DESTINATION ${CMAKE_INSTALL_PREFIX}
           FILES_MATCHING PATTERN "*.py")
   # Caffe proto files
-  install(DIRECTORY ${CMAKE_BINARY_DIR}/caffe DESTINATION ${PYTHON_LIB_REL_PATH}
+  install(DIRECTORY ${CMAKE_BINARY_DIR}/caffe DESTINATION ${CMAKE_INSTALL_PREFIX}
           FILES_MATCHING PATTERN "*.py")
   # Caffe2 proto files
-  install(DIRECTORY ${CMAKE_BINARY_DIR}/caffe2 DESTINATION ${PYTHON_LIB_REL_PATH}
+  install(DIRECTORY ${CMAKE_BINARY_DIR}/caffe2 DESTINATION ${CMAKE_INSTALL_PREFIX}
           FILES_MATCHING PATTERN "*.py")
 endif()
 
-# Finally, set the Caffe2_MAIN_LIBS variable in the parent scope.
-set(Caffe2_MAIN_LIBS ${Caffe2_MAIN_LIBS} PARENT_SCOPE)
+
+# ---[ Any builds that should happen after the main targets should be added here.
+# Binaries
+if (BUILD_BINARY)
+  add_subdirectory(binaries)
+endif()

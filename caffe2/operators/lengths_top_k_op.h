@@ -1,3 +1,4 @@
+// Copyright 2004-present Facebook. All Rights Reserved.
 
 #ifndef CAFFE2_OPERATORS_LENGTHS_TOP_K_OP_H_
 #define CAFFE2_OPERATORS_LENGTHS_TOP_K_OP_H_

@@ -4,7 +4,6 @@
 #include <vector>
 #include "caffe2/core/operator.h"
 #include "caffe2/core/tensor.h"
-#include "caffe2/utils/math.h"
 
 namespace caffe2 {
 

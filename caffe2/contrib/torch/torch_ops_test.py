@@ -13,7 +13,7 @@ import os
 import unittest
 
 try:
-    from libfb.py import parutil
+    from libfb import parutil
 except ImportError as e:
     # If libfb not found, skip all tests in this file
     raise unittest.SkipTest(str(e))

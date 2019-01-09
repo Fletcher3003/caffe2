@@ -18,12 +18,7 @@ nccl::NCCLExecution getNCCLElements(
   for (auto i = 0; i < op->InputSize(); ++i) {
     auto& el = ex.elements[i];
     el.src = &(op->Input<TensorCUDA>(i));
-    if (op->OutputSize() == 1) {
-      // Reduce op
-      if (i == ex.root) {
-        el.dst = op->Output<TensorCUDA>(0);
-      }
-    } else if (i < op->OutputSize()) {
+    if (i < op->OutputSize()) {
       el.dst = op->Output<TensorCUDA>(i);
     }
     // TODO - expensive (>1ms) - cache these.
@@ -100,6 +95,8 @@ class NCCLReduceOp final : public Operator<CUDAContext> {
     if (InputSize() == 1)
       return true;
     const auto& ex = getNCCLElements(this, context_);
+    CAFFE_ENFORCE_EQ(
+        ex.root, 0, "NCCLReduce has spurious deadlocks for non-zero root");
 
     if (AllInputsAre<float>(this)) {
       nccl::NCCL<float>::Reduce(ex);
@@ -136,47 +133,14 @@ class NCCLAllGatherOp final : public Operator<CUDAContext> {
  protected:
 };
 
-class NCCLReduceScatterOp final : public Operator<CUDAContext> {
- public:
-  USE_OPERATOR_FUNCTIONS(CUDAContext);
-  using Operator::Operator;
-  bool RunOnDevice() override {
-    if (AllInputsAre<float>(this)) {
-      nccl::NCCL<float>::ReduceScatter(getNCCLElements(this, context_));
-      return true;
-    } else if (AllInputsAre<float16>(this)) {
-      nccl::NCCL<float16>::ReduceScatter(getNCCLElements(this, context_));
-      return true;
-    } else {
-      return false;
-    }
-  }
-
- protected:
-};
-
 namespace {
-
-std::pair<std::vector<DeviceOption>, std::vector<DeviceOption>> ncclOpDevInfer(
-    const OperatorDef& def) {
-  std::vector<DeviceOption> opt;
-  for (int i = 0; i < def.input().size(); ++i) {
-    DeviceOption dev;
-    dev.set_device_type(1);
-    dev.set_cuda_gpu_id(i);
-    opt.push_back(dev);
-  }
-  return std::make_pair(opt, opt);
-}
-
 REGISTER_CUDA_OPERATOR(NCCLAllreduce, NCCLAllreduceOp);
 OPERATOR_SCHEMA(NCCLAllreduce)
     .NumInputs(1, CAFFE2_COMPILE_TIME_MAX_GPUS)
     .NumOutputs(1, CAFFE2_COMPILE_TIME_MAX_GPUS)
     .IdenticalTypeAndShape()
     .InputsCanCrossDevices()
-    .AllowOneToOneInplace()
-    .DeviceInferenceFunction(ncclOpDevInfer);
+    .AllowOneToOneInplace();
 SHOULD_NOT_DO_GRADIENT(NCCLAllreduce);
 
 REGISTER_CUDA_OPERATOR(NCCLBroadcast, NCCLBroadcastOp);
@@ -185,9 +149,7 @@ OPERATOR_SCHEMA(NCCLBroadcast)
     .NumOutputs(1, CAFFE2_COMPILE_TIME_MAX_GPUS)
     .IdenticalTypeAndShape()
     .InputsCanCrossDevices()
-    .EnforceOneToOneInplace()
-    .DeviceInferenceFunction(ncclOpDevInfer);
-
+    .EnforceOneToOneInplace();
 SHOULD_NOT_DO_GRADIENT(NCCLBroadcast);
 
 REGISTER_CUDA_OPERATOR(NCCLReduce, NCCLReduceOp);
@@ -196,25 +158,15 @@ OPERATOR_SCHEMA(NCCLReduce)
     .NumOutputs(1)
     .IdenticalTypeAndShapeOfInput(0)
     .InputsCanCrossDevices()
-    .AllowInplace([](int in, int out) -> bool { return (out == 0); })
-    .DeviceInferenceFunction(ncclOpDevInfer);
+    .AllowInplace({{0, 0}});
 SHOULD_NOT_DO_GRADIENT(NCCLReduce);
 
 REGISTER_CUDA_OPERATOR(NCCLAllGather, NCCLAllGatherOp);
 OPERATOR_SCHEMA(NCCLAllGather)
     .NumInputs(1, CAFFE2_COMPILE_TIME_MAX_GPUS)
     .NumOutputs(1, CAFFE2_COMPILE_TIME_MAX_GPUS)
-    .InputsCanCrossDevices()
-    .DeviceInferenceFunction(ncclOpDevInfer);
+    .InputsCanCrossDevices();
 SHOULD_NOT_DO_GRADIENT(NCCLAllGather);
-
-REGISTER_CUDA_OPERATOR(NCCLReduceScatter, NCCLReduceScatterOp);
-OPERATOR_SCHEMA(NCCLReduceScatter)
-    .NumInputs(1, CAFFE2_COMPILE_TIME_MAX_GPUS)
-    .NumOutputs(1, CAFFE2_COMPILE_TIME_MAX_GPUS)
-    .InputsCanCrossDevices()
-    .DeviceInferenceFunction(ncclOpDevInfer);
-SHOULD_NOT_DO_GRADIENT(NCCLReduceScatter);
 } // namespace
 
 } // namespace caffe2

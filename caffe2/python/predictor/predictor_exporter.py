@@ -14,7 +14,6 @@ import caffe2.python.predictor.predictor_py_utils as utils
 from builtins import bytes
 import collections
 
-
 def get_predictor_exporter_helper(submodelNetName):
     """ constracting stub for the PredictorExportMeta
         Only used to construct names to subfields,
@@ -36,7 +35,7 @@ def get_predictor_exporter_helper(submodelNetName):
 class PredictorExportMeta(collections.namedtuple(
     'PredictorExportMeta',
         'predict_net, parameters, inputs, outputs, shapes, name, \
-        extra_init_net, net_type, num_workers')):
+        extra_init_net, net_type')):
     """
     Metadata to be used for serializaing a net.
 
@@ -48,8 +47,6 @@ class PredictorExportMeta(collections.namedtuple(
     name will be used to identify multiple prediction nets.
 
     net_type is the type field in caffe2 NetDef - can be 'simple', 'dag', etc.
-
-    num_workers specifies for net type 'dag' how many threads should run ops
     """
     def __new__(
         cls,
@@ -61,19 +58,12 @@ class PredictorExportMeta(collections.namedtuple(
         name="",
         extra_init_net=None,
         net_type=None,
-        num_workers=None,
     ):
         inputs = [str(i) for i in inputs]
         outputs = [str(o) for o in outputs]
         assert len(set(inputs)) == len(inputs), (
             "All inputs to the predictor should be unique")
         parameters = [str(p) for p in parameters]
-        assert set(parameters).isdisjoint(inputs), (
-            "Parameters and inputs are required to be disjoint. "
-            "Intersection: {}".format(set(parameters).intersection(inputs)))
-        assert set(parameters).isdisjoint(outputs), (
-            "Parameters and outputs are required to be disjoint. "
-            "Intersection: {}".format(set(parameters).intersection(outputs)))
         shapes = shapes or {}
 
         if isinstance(predict_net, (core.Net, core.Plan)):
@@ -82,7 +72,7 @@ class PredictorExportMeta(collections.namedtuple(
         assert isinstance(predict_net, (caffe2_pb2.NetDef, caffe2_pb2.PlanDef))
         return super(PredictorExportMeta, cls).__new__(
             cls, predict_net, parameters, inputs, outputs, shapes, name,
-            extra_init_net, net_type, num_workers)
+            extra_init_net, net_type)
 
     def inputs_name(self):
         return utils.get_comp_name(predictor_constants.INPUTS_BLOB_TYPE,
@@ -117,12 +107,12 @@ class PredictorExportMeta(collections.namedtuple(
                                    self.name)
 
 
-def prepare_prediction_net(filename, db_type, device_option=None):
+def prepare_prediction_net(filename, db_type):
     '''
     Helper function which loads all required blobs from the db
     and returns prediction net ready to be used
     '''
-    metanet_def = load_from_db(filename, db_type, device_option)
+    metanet_def = load_from_db(filename, db_type)
 
     global_init_net = utils.GetNet(
         metanet_def, predictor_constants.GLOBAL_INIT_NET_TYPE)
@@ -146,9 +136,6 @@ def _global_init_net(predictor_export_meta):
         predictor_export_meta.parameters)
     net.Proto().external_input.extend([predictor_constants.PREDICTOR_DBREADER])
     net.Proto().external_output.extend(predictor_export_meta.parameters)
-
-    # Add the model_id in the predict_net to the global_init_net
-    utils.AddModelIdArg(predictor_export_meta, net.Proto())
     return net.Proto()
 
 
@@ -157,9 +144,9 @@ def get_meta_net_def(predictor_export_meta, ws=None):
     """
 
     ws = ws or workspace.C.Workspace.current
-    meta_net_def = metanet_pb2.MetaNetDef()
 
     # Predict net is the core network that we use.
+    meta_net_def = metanet_pb2.MetaNetDef()
     utils.AddNet(meta_net_def, predictor_export_meta.predict_init_name(),
                  utils.create_predict_init_net(ws, predictor_export_meta))
     utils.AddNet(meta_net_def, predictor_export_meta.global_init_name(),

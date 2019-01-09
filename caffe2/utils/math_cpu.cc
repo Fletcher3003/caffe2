@@ -14,25 +14,18 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cstring>
-#include <numeric>
 #include <random>
 #include <unordered_set>
-#include <vector>
+
+#ifdef CAFFE2_USE_MKL
+#include <mkl.h>
+#endif  // CAFFE2_USE_MKL
 
 #include "caffe2/utils/math.h"
 #include "caffe2/utils/cpu_neon.h"
 #include "caffe2/core/context.h"
 #include "Eigen/Core"
 #include "Eigen/Dense"
-
-#ifdef CAFFE2_USE_MKL
-#include <mkl.h>
-#endif  // CAFFE2_USE_MKL
-
-#ifdef CAFFE2_USE_HPTT
-#include <hptt.h>
-#endif // CAFFE2_USE_HPTT
 
 #if defined(_MSC_VER)
 #include <process.h>
@@ -406,74 +399,6 @@ CAFFE2_SPECIALIZED_AXPBY(float, s)
 
 #endif  // CAFFE2_USE_EIGEN_FOR_BLAS
 
-template <>
-void GemmBatched<float, CPUContext>(
-    const CBLAS_TRANSPOSE TransA,
-    const CBLAS_TRANSPOSE TransB,
-    const int batch_size,
-    const int M,
-    const int N,
-    const int K,
-    const float alpha,
-    const float* A,
-    const float* B,
-    const float beta,
-    float* C,
-    CPUContext* context,
-    Tensor<CPUContext>*, /* scratch */
-    TensorProto::DataType /* math_type */) {
-  const int a_stride = M * K;
-  const int b_stride = K * N;
-  const int c_stride = M * N;
-
-#ifdef CAFFE2_USE_MKL
-  (void)context;
-
-  const int lda = (TransA == CblasNoTrans) ? K : M;
-  const int ldb = (TransB == CblasNoTrans) ? N : K;
-  std::vector<const float*> a_array(batch_size, nullptr);
-  std::vector<const float*> b_array(batch_size, nullptr);
-  std::vector<float*> c_array(batch_size, nullptr);
-  for (int i = 0; i < batch_size; ++i) {
-    a_array[i] = A + a_stride * i;
-    b_array[i] = B + b_stride * i;
-    c_array[i] = C + c_stride * i;
-  }
-  cblas_sgemm_batch(
-      CblasRowMajor,
-      &TransA,
-      &TransB,
-      &M,
-      &N,
-      &K,
-      &alpha,
-      a_array.data(),
-      &lda,
-      b_array.data(),
-      &ldb,
-      &beta,
-      c_array.data(),
-      &N, // ldc_array
-      1,
-      &batch_size);
-#else // CAFFE2_USE_MKL
-  // loop over matrices in the batch
-  for (int i = 0; i < batch_size; ++i) {
-    math::Gemm<float, CPUContext>(
-        TransA,
-        TransB,
-        M,
-        N,
-        K,
-        alpha,
-        A + a_stride * i,
-        B + b_stride * i,
-        beta,
-        C + c_stride * i,
-        context);
-  }
-#endif
-}
 
 ////////////////////////////////////////////////////////////////////////////////
 // MKL VML alternatives.
@@ -630,35 +555,6 @@ DEFINE_SIMPLE_BINARY_FUNCTION(Div, /)
 // Eigen or via custom code.
 ////////////////////////////////////////////////////////////////////////////////
 
-#define CAFFE2_SPECIALIZED_REDUCEMIN(T)    \
-  template <>                              \
-  void ReduceMin<T, CPUContext>(           \
-      const int N,                         \
-      const T* x,                          \
-      T* y,                                \
-      Tensor<CPUContext>* /*scratch_ptr*/, \
-      CPUContext* /*context*/) {           \
-    *y = *std::min_element(x, x + N);      \
-  }
-CAFFE2_SPECIALIZED_REDUCEMIN(float)
-#undef CAFFE2_SPECIALIZED_REDUCEMIN
-
-#define CAFFE2_SPECIALIZED_REDUCEMAX(T)    \
-  template <>                              \
-  void ReduceMax<T, CPUContext>(           \
-      const int N,                         \
-      const T* x,                          \
-      T* y,                                \
-      Tensor<CPUContext>* /*scratch_ptr*/, \
-      CPUContext* /*context*/) {           \
-    *y = *std::max_element(x, x + N);      \
-  }
-CAFFE2_SPECIALIZED_REDUCEMAX(float)
-CAFFE2_SPECIALIZED_REDUCEMAX(int32_t)
-CAFFE2_SPECIALIZED_REDUCEMAX(int64_t)
-
-#undef CAFFE2_SPECIALIZED_REDUCEMAX
-
 #define CAFFE2_SPECIALIZED_ROWWISEMAX(T)                         \
   template <>                                                    \
   void RowwiseMax<T, CPUContext>(                                \
@@ -678,17 +574,6 @@ CAFFE2_SPECIALIZED_ROWWISEMAX(float)
   }
 CAFFE2_SPECIALIZED_COLWISEMAX(float)
 #undef CAFFE2_SPECIALIZED_COLWISEMAX
-
-#define CAFFE2_SPECIALIZED_ELEMWISEMAX(T)                                   \
-  template <>                                                               \
-  void ElemwiseMax<T, CPUContext>(                                          \
-      const int N, const T* x, const T* y, T* z, CPUContext* /*context*/) { \
-    std::transform(x, x + N, y, z, [](const T& x_i, const T& y_i) {         \
-      return std::max(x_i, y_i);                                            \
-    });                                                                     \
-  }
-CAFFE2_SPECIALIZED_ELEMWISEMAX(float)
-#undef CAFFE2_SPECIALIZED_ELEMWISEMAX
 
 #define CAFFE2_SPECIALIZED_MAXIMUM(T)                                          \
   template <>                                                                  \
@@ -739,11 +624,9 @@ DEFINE_BROADCAST_BINARY_FUNCTION(Div, /)
 
 #define CAFFE2_SPECIALIZED_SET(T)                                             \
   template <>                                                                 \
-  void Set<T, CPUContext>(const size_t N, const T alpha, T* Y, CPUContext*) { \
+  void Set<T, CPUContext>(const TIndex N, const T alpha, T* Y, CPUContext*) { \
     if (alpha == (T)0) {                                                      \
-      if (Y != nullptr) {                                                     \
-        memset(Y, 0, N * sizeof(T));                                          \
-      }                                                                       \
+      memset(Y, 0, N * sizeof(T));                                            \
     } else {                                                                  \
       EigenVectorMap<T>(Y, N).setConstant(alpha);                             \
     }                                                                         \
@@ -829,26 +712,20 @@ CAFFE2_SPECIALIZED_CPU_ADD_STRIPED_BATCH(float);
 
 template <>
 void RandUniform<float, CPUContext>(
-    const size_t n,
-    const float a,
-    const float b,
-    float* r,
+    const int n, const float a, const float b, float* r,
     CPUContext* context) {
   std::uniform_real_distribution<float> distribution(a, b);
-  for (auto i = 0; i < n; ++i) {
+  for (int i = 0; i < n; ++i) {
     r[i] = distribution(context->RandGenerator());
   }
 }
 
 template <>
 void RandUniform<int, CPUContext>(
-    const size_t n,
-    const int a,
-    const int b,
-    int* r,
+    const int n, const int a, const int b, int* r,
     CPUContext* context) {
   std::uniform_int_distribution<int> distribution(a, b);
-  for (auto i = 0; i < n; ++i) {
+  for (int i = 0; i < n; ++i) {
     r[i] = distribution(context->RandGenerator());
   }
 }
@@ -887,13 +764,10 @@ CAFFE2_SPECIALIZED_RAND_UNIFORM_UNIQUE(int64_t);
 
 template <>
 void RandGaussian<float, CPUContext>(
-    const size_t n,
-    const float mean,
-    const float std,
-    float* r,
+    const int n, const float mean, const float std, float* r,
     CPUContext* context) {
   std::normal_distribution<float> distribution(mean, std);
-  for (auto i = 0; i < n; ++i) {
+  for (int i = 0; i < n; ++i) {
     r[i] = distribution(context->RandGenerator());
   }
 }
@@ -1461,192 +1335,37 @@ void CopyMatrix<CPUContext>(
     const int lda,
     void* B,
     const int ldb,
-    CPUContext* /*context*/,
-    TypeMeta::TypedCopy copy) {
-  if (A == nullptr || B == nullptr) {
-    return;
-  }
+    CPUContext* /*context*/) {
   if (lda == N && ldb == N) {
     // can coalese to a single memcpy of size M * N
-    if (copy) {
-      copy(static_cast<const char*>(A), static_cast<char*>(B), N * M);
-    } else {
-      memcpy(
-          static_cast<char*>(B), static_cast<const char*>(A), itemsize * N * M);
-    }
+    memcpy(
+        static_cast<char*>(B), static_cast<const char*>(A), itemsize * N * M);
     return;
   }
 
   for (int i = 0; i < M; ++i) {
-    if (copy) {
-      copy(
-          static_cast<const char*>(A) + lda * i * itemsize,
-          static_cast<char*>(B) + ldb * i * itemsize,
-          N);
-    } else {
-      memcpy(
-          static_cast<char*>(B) + ldb * i * itemsize,
-          static_cast<const char*>(A) + lda * i * itemsize,
-          itemsize * N);
-    }
+    memcpy(static_cast<char*>(B) + ldb * i * itemsize,
+           static_cast<const char*>(A) + lda * i * itemsize,
+           itemsize * N);
   }
 }
 
-#define CAFFE2_SPECIALIZED_COPYVECTOR(T)                            \
-  template <>                                                       \
-  void CopyVector<T, CPUContext>(                                   \
-      const int N, const T* src, T* dst, CPUContext* /*context*/) { \
-    if (src != dst && N > 0) {                                      \
-      memcpy(dst, src, sizeof(T) * N);                              \
-    }                                                               \
-  }
-CAFFE2_SPECIALIZED_COPYVECTOR(float)
-#undef CAFFE2_SPECIALIZED_COPYVECTOR
-
-namespace {
-
-#ifdef CAFFE2_USE_HPTT
-
-bool TryTransposeWithHPTT(
-    const int num_axes,
-    const int* dims,
-    const int* axes,
-    const float* X,
-    float* Y) {
-  std::vector<int> axes_cm(num_axes);
-  std::vector<int> dims_cm(num_axes);
-
-  // Convert row-major index to column-major.
-  const auto cm_fn = [num_axes](const int i) { return num_axes - i - 1; };
-  for (int i = 0; i < num_axes; ++i) {
-    axes_cm[i] = cm_fn(axes[cm_fn(i)]);
-    dims_cm[i] = dims[cm_fn(i)];
-  }
-  auto plan = hptt::create_plan(
-      axes_cm.data(),
-      num_axes,
-      1.0,
-      X,
-      dims_cm.data(),
-      nullptr,
-      0.0,
-      Y,
-      nullptr,
-      hptt::ESTIMATE,
-      1);
-  if (plan == nullptr) {
-    return false;
-  }
-  plan->execute();
-  return true;
+uint32_t randomNumberSeed() {
+  // Originally copied from folly::randomNumberSeed (at 418ad4)
+  // modified to use chrono instead of sys/time.h
+  static std::atomic<uint32_t> seedInput(0);
+  auto tv = std::chrono::system_clock::now().time_since_epoch();
+  uint64_t usec = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::microseconds>(tv).count());
+  uint32_t tv_sec = usec / 1000000;
+  uint32_t tv_usec = usec % 1000000;
+  const uint32_t kPrime0 = 51551;
+  const uint32_t kPrime1 = 61631;
+  const uint32_t kPrime2 = 64997;
+  const uint32_t kPrime3 = 111857;
+  return kPrime0 * (seedInput++) + kPrime1 * static_cast<uint32_t>(getpid()) +
+      kPrime2 * tv_sec + kPrime3 * tv_usec;
 }
 
-#endif // CAFFE2_USE_HPTT
-
-std::vector<int>
-ComputeXStrides(const int num_axes, const int* dims, const int* axes) {
-  std::vector<int> x_strides(num_axes);
-  std::vector<int> buff(num_axes);
-  int cur_stride = 1;
-  for (int i = num_axes - 1; i >= 0; --i) {
-    buff[i] = cur_stride;
-    cur_stride *= dims[i];
-  }
-  for (int i = 0; i < num_axes; ++i) {
-    x_strides[i] = buff[axes[i]];
-  }
-  return x_strides;
-}
-
-void IncreaseIndex(const int* dims, std::vector<int>* index) {
-  for (int i = index->size() - 1; i >= 0; --i) {
-    ++index->at(i);
-    if (index->at(i) >= dims[i]) {
-      index->at(i) -= dims[i];
-    } else {
-      break;
-    }
-  }
-}
-
-template <typename T>
-void TransposeCPU(
-    const int num_axes,
-    const int* x_dims,
-    const int* y_dims,
-    const int* axes,
-    const int data_size,
-    const T* X,
-    T* Y) {
-  // Measure amount of contiguous data we can copy at once
-  int block_size = 1;
-  int num_shared_idxs = 0;
-  for (int i = num_axes - 1; i >= 0 && axes[i] == i; --i) {
-    block_size *= y_dims[i];
-    ++num_shared_idxs;
-  }
-
-  if (num_axes < 2 || num_shared_idxs == num_axes) {
-    memcpy(Y, X, data_size * sizeof(T));
-    return;
-  }
-
-  const int itr_axes = num_axes - num_shared_idxs;
-  const std::vector<int> x_strides = ComputeXStrides(itr_axes, x_dims, axes);
-  std::vector<int> index_digits(itr_axes, 0);
-  const int num_blocks = data_size / block_size;
-  for (int y_index = 0; y_index < num_blocks; ++y_index) {
-    const int x_index = std::inner_product(
-        x_strides.cbegin(), x_strides.cend(), index_digits.cbegin(), 0);
-    if (block_size == 1) {
-      Y[y_index] = X[x_index];
-    } else {
-      memcpy(
-          Y + block_size * y_index,
-          X + block_size * x_index,
-          block_size * sizeof(T));
-    }
-    IncreaseIndex(y_dims, &index_digits);
-  }
-}
-
-} // namespace
-
-template <>
-void Transpose<float, CPUContext>(
-    const int num_axes,
-    const int* x_dims,
-    const int* y_dims,
-    const int* axes,
-    const int data_size,
-    const float* X,
-    float* Y,
-    CPUContext* /* context */) {
-#ifdef CAFFE2_USE_HPTT
-  if (TryTransposeWithHPTT(num_axes, x_dims, axes, X, Y)) {
-    return;
-  }
-#endif // CAFFE2_USE_HPTT
-  TransposeCPU(num_axes, x_dims, y_dims, axes, data_size, X, Y);
-}
-
-#define CAFFE2_SPECIALIZED_TRANSPOSE(T)                            \
-  template <>                                                      \
-  void Transpose<T, CPUContext>(                                   \
-      const int num_axes,                                          \
-      const int* x_dims,                                           \
-      const int* y_dims,                                           \
-      const int* axes,                                             \
-      const int data_size,                                         \
-      const T* X,                                                  \
-      T* Y,                                                        \
-      CPUContext* /* context */) {                                 \
-    TransposeCPU(num_axes, x_dims, y_dims, axes, data_size, X, Y); \
-  }
-CAFFE2_SPECIALIZED_TRANSPOSE(double)
-CAFFE2_SPECIALIZED_TRANSPOSE(int)
-CAFFE2_SPECIALIZED_TRANSPOSE(long)
-#undef CAFFE2_SPECIALIZED_TRANSPOSE
-
-} // namespace math
-} // namespace caffe2
+}  // namespace math
+}  // namespace caffe2

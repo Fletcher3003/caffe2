@@ -27,7 +27,6 @@ def _ConvBase(
     order="NCHW",
     cudnn_exhaustive_search=False,
     ws_nbytes_limit=None,
-    float16_compute=False,
     **kwargs
 ):
     kernels = []
@@ -37,11 +36,7 @@ def _ConvBase(
         else:
             kernels = kernel
     else:
-        if isinstance(kernel, list):
-            assert len(kernel) == 2, "Conv support only a 2D kernel."
-            kernels = kernel
-        else:
-            kernels = [kernel] * 2
+        kernels = [kernel] * 2
 
     requested_engine = kwargs.get('engine')
     if requested_engine is not None:
@@ -103,10 +98,6 @@ def _ConvBase(
     if transform_inputs is not None:
         transform_inputs(model, blob_out, inputs)
 
-    # Enable float 16 compute kernel (relevant for CUDA)
-    if float16_compute:
-        kwargs['float16_compute'] = True
-
     # For the operator, we no longer need to provide the no_bias field
     # because it can automatically figure this out from the number of
     # inputs.
@@ -122,22 +113,12 @@ def _ConvBase(
             order=order,
             **kwargs)
     else:
-        if isinstance(kernel, list):
-            return model.net.Conv(
-                inputs,
-                blob_out,
-                kernel_h=kernel[0],
-                kernel_w=kernel[1],
-                order=order,
-                **kwargs)
-        else:
-            return model.net.Conv(
-                inputs,
-                blob_out,
-                kernel=kernel,
-                order=order,
-                **kwargs)
-
+        return model.net.Conv(
+            inputs,
+            blob_out,
+            kernel=kernel,
+            order=order,
+            **kwargs)
 
 
 def conv_nd(

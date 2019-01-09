@@ -43,8 +43,7 @@ Calculates the absolute value of the given input tensor, element-wise.
     .Output(
         0,
         "output",
-        "The absolute value of the input tensor computed element-wise")
-    .InheritOnnxSchema("Abs");
+        "The absolute value of the input tensor computed element-wise");
 
 OPERATOR_SCHEMA(AbsGradient).NumInputs(2).NumOutputs(1).IdenticalTypeAndShape();
 

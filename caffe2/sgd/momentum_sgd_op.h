@@ -6,14 +6,14 @@ namespace caffe2 {
 
 template <typename Context>
 void momentum_sgd_update(
-    const int N,
+    int N,
     const float* g,
     const float* m,
     float* ng,
     float* nm,
     const float* lr,
-    const float momentum,
-    const bool nesterov,
+    float momentum,
+    bool nesterov,
     float* param,
     Context* /*context*/) {
   const float LR = lr[0];
@@ -87,8 +87,8 @@ class MomentumSGDUpdateOp final : public Operator<Context> {
     // Iter live on the CPU
     CAFFE_ENFORCE(OperatorBase::InputIsType<Tensor<Context>>(GRAD));
     CAFFE_ENFORCE(OperatorBase::InputIsType<Tensor<Context>>(MOMENTUM));
-    CAFFE_ENFORCE_EQ(Input(LR).size(), 1);
-    CAFFE_ENFORCE_EQ(Input(GRAD).size(), Input(MOMENTUM).size());
+    CAFFE_ENFORCE(Input(LR).size() == 1);
+    CAFFE_ENFORCE(Input(GRAD).size() == Input(MOMENTUM).size());
     Output(OUTPUT_GRAD)->ResizeLike(Input(GRAD));
     Output(OUTPUT_MOMENTUM)->ResizeLike(Input(MOMENTUM));
 

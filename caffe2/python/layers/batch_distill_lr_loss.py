@@ -5,7 +5,7 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
-from caffe2.python import core, schema
+from caffe2.python import schema
 from caffe2.python.layers.layers import (
     ModelLayer,
 )
@@ -32,7 +32,7 @@ class BatchDistillLRLoss(ModelLayer):
             schema.Struct(
                 ('teacher_label', schema.Scalar()),
                 ('label', schema.Scalar()),
-                ('logit', schema.Scalar()),
+                ('prediction', schema.Scalar())
             ),
             input_record
         )
@@ -43,37 +43,24 @@ class BatchDistillLRLoss(ModelLayer):
             self.get_next_blob_reference('output')
         )
 
-    def add_ops(self, net):
+    def add_train_ops(self, net):
         label = self.input_record.label()
-        if self.input_record.label.field_type() != np.float32:
-            label = net.Cast(
-                label,
-                net.NextScopedBlob('float_label'),
-                to=core.DataType.FLOAT,
-            )
-
-        # Assuming 1-D input
-        label = net.ExpandDims(label, net.NextScopedBlob('expanded_label'),
-                               dims=[1])
+        if self.input_record.label.field_type() != np.int32:
+            label = net.Cast(label, net.NextScopedBlob('int32_label'), to='int32')
 
         teacher_label = self.input_record.teacher_label()
-        if self.input_record.teacher_label.field_type() != np.float32:
-            teacher_label = net.Cast(
-                teacher_label,
-                net.NextScopedBlob('float_teacher_label'),
-                to=core.DataType.FLOAT,
-            )
-        teacher_label = net.ExpandDims(
-            teacher_label, net.NextScopedBlob('expanded_teacher_label'),
-            dims=[1])
 
-        true_xent = net.SigmoidCrossEntropyWithLogits(
-            [self.input_record.logit(), label],
-            net.NextScopedBlob('cross_entropy')
+        class_probabilities = net.MakeTwoClass(
+            self.input_record.prediction(),
+            net.NextScopedBlob('two_class_predictions')
         )
 
-        teacher_xent = net.SigmoidCrossEntropyWithLogits(
-            [self.input_record.logit(), teacher_label],
+        true_xent = net.LabelCrossEntropy(
+            [class_probabilities, label],
+            net.NextScopedBlob('cross_entropy')
+        )
+        teacher_xent = net.CrossEntropy(
+            [self.input_record.prediction(), teacher_label],
             net.NextScopedBlob('teacher_cross_entropy')
         )
 

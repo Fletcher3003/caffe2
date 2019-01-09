@@ -1,7 +1,7 @@
 #include <cfloat>
 
+#include "caffe2/core/common_cudnn.h"
 #include "caffe2/core/context_gpu.h"
-#include "caffe2/core/cudnn_wrappers.h"
 #include "caffe2/operators/spatial_batch_norm_op.h"
 #include "caffe2/utils/math.h"
 
@@ -11,6 +11,8 @@ static_assert(CUDNN_VERSION >= 5000,
              "CudnnSpatialBN requires cudnn version 5.0 or above.");
 
 namespace caffe2 {
+
+constexpr cudnnBatchNormMode_t kSpatialBNMode = CUDNN_BATCHNORM_SPATIAL;
 
 class CudnnSpatialBNOp final : public SpatialBNOp<CUDAContext> {
  public:
@@ -25,11 +27,6 @@ class CudnnSpatialBNOp final : public SpatialBNOp<CUDAContext> {
                  << "CUDNN_BN_MIN_EPSILON instead.";
     }
     epsilon_ = std::max(epsilon_, CUDNN_BN_MIN_EPSILON);
-#if CUDNN_VERSION_MIN(7,0,0)
-    mode_ = CUDNN_BATCHNORM_SPATIAL_PERSISTENT;
-#else
-    mode_ = CUDNN_BATCHNORM_SPATIAL;
-#endif
   }
 
   ~CudnnSpatialBNOp() {
@@ -46,8 +43,6 @@ class CudnnSpatialBNOp final : public SpatialBNOp<CUDAContext> {
   cudnnTensorDescriptor_t data_desc_;
   cudnnTensorDescriptor_t bn_param_desc_;
   vector<TIndex> cudnn_input_dims_;
-
-  cudnnBatchNormMode_t mode_;
 };
 
 class CudnnSpatialBNGradientOp final : public SpatialBNGradientOp<CUDAContext> {
@@ -64,11 +59,6 @@ class CudnnSpatialBNGradientOp final : public SpatialBNGradientOp<CUDAContext> {
                  << "CUDNN_BN_MIN_EPSILON instead.";
     }
     epsilon_ = std::max(epsilon_, CUDNN_BN_MIN_EPSILON);
-#if CUDNN_VERSION_MIN(7,0,0)
-    mode_ = CUDNN_BATCHNORM_SPATIAL_PERSISTENT;
-#else
-    mode_ = CUDNN_BATCHNORM_SPATIAL;
-#endif
   }
 
   ~CudnnSpatialBNGradientOp() {
@@ -86,8 +76,6 @@ class CudnnSpatialBNGradientOp final : public SpatialBNGradientOp<CUDAContext> {
   cudnnTensorDescriptor_t data_desc_;
   cudnnTensorDescriptor_t bn_param_desc_;
   vector<TIndex> cudnn_input_dims_;
-
-  cudnnBatchNormMode_t mode_;
 };
 
 
@@ -145,7 +133,7 @@ bool CudnnSpatialBNOp::DoRunWithType() {
           strides.data()));
     }
     CUDNN_ENFORCE(cudnnDeriveBNTensorDescriptor(
-        bn_param_desc_, data_desc_, mode_));
+        bn_param_desc_, data_desc_, kSpatialBNMode));
   }
 
   // Now, depending on whether we are running test or not, we have two paths.
@@ -162,8 +150,7 @@ bool CudnnSpatialBNOp::DoRunWithType() {
     Y->ResizeLike(X);
     CUDNN_ENFORCE(cudnnBatchNormalizationForwardInference(
         cudnn_wrapper_.inline_cudnn_handle(),
-        // Note: PERSISTENT not implemented for inference
-        CUDNN_BATCHNORM_SPATIAL,
+        kSpatialBNMode,
         cudnnTypeWrapper<T>::kOne(),
         cudnnTypeWrapper<T>::kZero(),
         data_desc_,
@@ -221,7 +208,7 @@ bool CudnnSpatialBNOp::DoRunWithType() {
 
     CUDNN_ENFORCE(cudnnBatchNormalizationForwardTraining(
         cudnn_wrapper_.inline_cudnn_handle(),
-        mode_,
+        kSpatialBNMode,
         cudnnTypeWrapper<T>::kOne(),
         cudnnTypeWrapper<T>::kZero(),
         data_desc_,
@@ -297,7 +284,7 @@ bool CudnnSpatialBNGradientOp::DoRunWithType() {
           strides.data()));
     }
     CUDNN_ENFORCE(cudnnDeriveBNTensorDescriptor(
-        bn_param_desc_, data_desc_, mode_));
+        bn_param_desc_, data_desc_, kSpatialBNMode));
   }
 
   auto* dX = Output(INPUT_GRAD);
@@ -314,7 +301,7 @@ bool CudnnSpatialBNGradientOp::DoRunWithType() {
 
   CUDNN_ENFORCE(cudnnBatchNormalizationBackward(
       cudnn_wrapper_.inline_cudnn_handle(),
-      mode_,
+      kSpatialBNMode,
       cudnnTypeWrapper<T>::kOne(),
       cudnnTypeWrapper<T>::kZero(),
       cudnnTypeWrapper<T>::kOne(),

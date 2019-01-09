@@ -19,13 +19,45 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
-
 from caffe2.python import core
 from caffe2.python.schema import Field, Struct, from_blob_list
 import numpy as np
 
 
 class Reader(object):
+    def __init__(self, schema=None):
+        if schema is not None:
+            assert isinstance(schema, Field)
+        self._schema = schema
+
+    def schema(self):
+        """
+        Return the schema associated with the Reader
+        """
+        assert self._schema is not None, 'Schema not provided for this reader.'
+        return self._schema
+
+    def _set_schema(self, schema):
+        self._schema = schema
+
+    def setup_ex(self, init_net, finish_net):
+        """Nets to be executed once at startup and finish.
+           Experimental extension. Don't use yet"""
+        pass
+
+    def read_ex(self, local_init_net, local_finish_net):
+        """Experimental extension to the interface. Don't use yet"""
+        read_net = core.Net('reader_body')
+        return ([read_net], ) + self.read(read_net)
+
+    def read_record_ex(self, local_init_net, local_finish_net):
+        """Experimental extension to the interface. Don't use yet"""
+        nets, should_stop, fields = self.read_ex(
+            local_init_net, local_finish_net)
+        if self._schema:
+            fields = from_blob_list(self._schema, fields)
+        return nets, should_stop, fields
+
     """
     Reader is an abstract class to be implemented in order to provide
     operations capable of iterating through a dataset or stream of data.
@@ -35,41 +67,11 @@ class Reader(object):
     optionally support the `reset` operation, which is useful when multiple
     passes over the data are required.
     """
-    def __init__(self, schema=None):
-        if schema is not None:
-            assert isinstance(schema, Field)
-        self._schema = schema
-
-    def schema(self):
-        assert self._schema is not None, 'Schema not provided for this reader.'
-        return self._schema
-
-    def _set_schema(self, schema):
-        self._schema = schema
-
-    def setup_ex(self, init_net, finish_net):
-        """Setup nets to run at task initialization and cleanup time.
-
-        Args:
-            global_init_net: A net invoked at task init time.
-            global_finish_net: A net invoked at task cleanup time.
-        """
-        pass
-
-    def read_ex(self, local_init_net, local_finish_net):
-        read_net = core.Net('reader_body')
-        return ([read_net], ) + self.read(read_net)
-
-    def read_record_ex(self, local_init_net, local_finish_net):
-        nets, should_stop, fields = self.read_ex(
-            local_init_net, local_finish_net)
-        if self._schema:
-            fields = from_blob_list(self._schema, fields)
-        return nets, should_stop, fields
-
     def read(self, read_net):
-        """Append operations to read_net that will read a batch from the
-        underlying data soruce.
+        """
+        Add operations to read_net that will read the read batch of data
+        and return a list of BlobReference representing the blobs that will
+        contain the batches produced.
 
         Operations added to `read_net` must be thread safe and atomic, that is,
         it should be possible to clone `read_net` and run multiple instances of
@@ -80,12 +82,13 @@ class Reader(object):
 
         Returns:
             A tuple (should_stop, fields), with:
+
                 should_stop: BlobReference pointing to a boolean scalar
-                    blob that indicates whether the read operation
-                    was succesfull or whether the end of data has
-                    been reached.
+                             blob that indicates whether the read operation
+                             was succesfull or whether the end of data has
+                             been reached.
                 fields: A tuple of BlobReference containing the latest batch
-                    of data that was read.
+                        of data that was read.
         """
         raise NotImplementedError('Readers must implement `read`.')
 
@@ -119,12 +122,14 @@ class Reader(object):
             core.RunPlan(p)
 
         Args:
+
             reader_net_name: (optional) the name of the reader_net to be
                              created. The execution step will
                              be named accordingly.
 
         Returns:
             A tuple (read_step, fields), with:
+
                 read_step: A newly created execution step containing a net with
                            read operations. The step will have `stop_blob` set,
                            in order to stop the loop on end of data.
@@ -152,6 +157,7 @@ class Writer(object):
     data, and `commit`, which adds operations to a net in order to indicate
     that no more data will be written.
     """
+
     _schema = None
 
     def schema(self):
@@ -211,19 +217,19 @@ class ReaderBuilder(object):
     def schema(self):
         raise NotImplementedError()
 
-    def setup(self, **kwargs):
-        """
-        Optionally, perform one-time setup before calling new_reader().
-        Subclass should make sure this function is only called once.
-        """
+    def enqueue_splits(self, net, split_queue):
         raise NotImplementedError()
 
-    def new_reader(self, **kwargs):
+    def splits(self, net):
+        raise NotImplementedError()
+
+    def new_reader(self, split_reader=None):
         raise NotImplementedError()
 
 
 class PipedReaderBuilder(ReaderBuilder):
-    """ReaderBuilder that modifies underlying builder by calling `piper`
+    """
+    ReaderBuilder that modifies underlying builder by calling `piper`
     function on each new reader produced, and return the result of
     the function. This way, it is possible to append data processing
     pipelines that will be replicated for each reader that gets created.
@@ -242,16 +248,14 @@ class PipedReaderBuilder(ReaderBuilder):
     def schema(self):
         return self._builder.schema()
 
-    def setup(self, **kwargs):
-        self._builder.setup(**kwargs)
+    def enqueue_splits(self, net, split_queue):
+        return self._builder.enqueue_splits(net, split_queue)
 
-    def new_reader(self, **kwargs):
-        # Passing everything down since you could wrap a PipedReaderBuilder in
-        # another PipedReaderBuilder
-        output = self._piper(
-            reader=self._builder.new_reader(**kwargs),
-            **kwargs
-        )
+    def splits(self, net):
+        return self._builder.splits(net)
+
+    def new_reader(self, split_reader=None):
+        output = self._piper(self._builder.new_reader(split_reader))
         return output if isinstance(output, Reader) else output.reader()
 
 
@@ -312,89 +316,60 @@ class CounterReader(Reader):
         return [count_net], self.should_stop, [value]
 
 
-class ReaderWithLimitBase(Reader):
-    """Abstract Reader constrained by certain conditions.
-
-    Base class for Reader classes which check for certain conditions to stop
-    further processing (e.g. max number of iterations or time limit).
-    Also produces a boolean blob (data_finished) that can be used to see if
-    the reader exausted all input data (true) or stopped for another reason
-    (false).
+class ReaderWithLimit(Reader):
     """
+    Reader that stops after `num_iter` calls.
 
-    def __init__(self, reader):
+    If num_iter is None it becomes just a simple reader that exports a global
+    flag for "out of data".
+    """
+    def __init__(self, reader, num_iter=1):
         Reader.__init__(self, schema=reader._schema)
         self.reader = reader
-        self.net = core.Net('reader_with_limit')
-        self._data_finished = self.net.AddExternalInput(
-            self.net.NextName('data_finished'))
-        self.should_stop = None
+        self.counter = None
+        self.num_iter = num_iter
+        net = core.Net('reader_with_limit')
+        self._data_finished = net.AddExternalInput(
+            net.NextName('data_finished'))
+        if self.num_iter is not None:
+            self.counter = net.AddExternalInput(net.NextName('counter'))
 
     def setup_ex(self, global_init_net, global_finish_net):
+        if self.counter:
+            global_init_net.CreateCounter(
+                [], [self.counter], init_count=int(self.num_iter))
+        self.reader.setup_ex(global_init_net, global_finish_net)
         global_init_net.ConstantFill(
             [], [self._data_finished],
             shape=[], value=False, dtype=core.DataType.BOOL)
-        self.reader.setup_ex(global_init_net, global_finish_net)
-        self.setup_limiter(global_init_net, global_finish_net)
 
     def read_ex(self, local_init_net, local_finish_net):
-        """Reads from an underlying Reader class, but may stop due to additional
-        constraints.
+        """ 1. check if we reached number of iterations and populate the same
+        should_stop blob """
+        count_net = core.Net('limited_reader_counter')
+        if self.counter:
+            should_stop = count_net.CountDown([self.counter], 1)
+        else:
+            should_stop = count_net.ConstantFill(
+                [], 1,
+                shape=[], value=False, dtype=core.DataType.BOOL)
 
-        Build and return network(s) to read data from a Reader with
-        additional constraints, depending on which derived class is used.
-        Derived classes implement setup_limited and check_limiter_condition
-        which determine the nature of the constraint imposed on the reader,
-        e.g. iteration limits or time limit.
-
-        Args:
-            local_init_net: A net invoked at task instance init time (Once per
-                parallel thread).
-            local_finish_net: A net invoked at task instance cleanup time (Once
-                per parallel thread).
-        """
-
-        # Check if limiting constraint is met.
-        stop_condition_net = core.Net('limited_reader_condition')
-        should_stop = self.check_limiter_condition(stop_condition_net)
-
-        # Call original reader.
+        """ 2. call original reader """
         nets, local_data_finished, fields = self.reader.read_ex(
             local_init_net, local_finish_net)
         self._set_schema(self.reader._schema)
 
-        # Check if original reader is done.
+        """ 3. check if original reader is done. """
         check_done_net = core.Net('limited_reader_post')
-        # Copy to the same blob as the counter output to trigger reader
-        # stopping - this is ok because execution will check should_stop_blob
-        # after every single operation, so it has already been checked on this
-        # iteration by this point.
+        # copy to the same blob as the counter output to trigger reader
+        # stopping
         check_done_net.Copy(local_data_finished, should_stop)
-        # Update externally-accessible flag indicating if reader is done
+        # update global flag that underlying reader is done
         check_done_net.Or([self._data_finished, local_data_finished],
                           [self._data_finished])
 
-        return [stop_condition_net] + nets + [check_done_net], should_stop, fields
-
-    def setup_limiter(self, global_init_net, global_finish_net):
-        """Configure task level init/cleanup nets required to implement limit
-        condition. Must be implemented by subclass.
-
-        Args:
-            global_init_net: A net invoked at task init time.
-            global_finish_net: A net invoked at task cleanup time.
-        """
-        raise NotImplementedError("Subclass must implement `setup_limiter`")
-
-    def check_limiter_condition(self, stop_condition_net):
-        """Configure a net that is invoked between reading batches to see if
-        limit condition is met. Must be implemented by subclass.
-
-        Args:
-            stop_condition_net: A net invoked to evaluate an early termination
-                condition.
-        """
-        raise NotImplementedError("Subclass must implement `check_limiter_condition")
+        # this relies on `should_stop` being called after each net.
+        return [count_net] + nets + [check_done_net], should_stop, fields
 
     def data_finished(self):
         """
@@ -406,89 +381,5 @@ class ReaderWithLimitBase(Reader):
         return self._data_finished
 
 
-class ReaderWithLimit(ReaderWithLimitBase):
-    """Reader that stops after `num_iter` batches.
-
-    If `num_iter` <= 0 or is None, reverts to an unconstrained reader that
-    exports a boolean blob indicating that the reader has exhausted
-    the data steam.
-    """
-    def __init__(self, reader, num_iter=1):
-        """Class initializer.
-
-        Args:
-            reader: The underlying reader object doing the actual read.
-            num_iter: Number of batches to read. If `None`,
-                the class reverts to a normal reader except that it also
-                produces a data_finished blob as a side effect to indicate
-                whether the input stream is exhausted.
-        """
-        super(ReaderWithLimit, self).__init__(reader)
-        self.counter = None
-        self.num_iter = num_iter
-        if self.num_iter is not None:
-            self.counter = self.net.AddExternalInput(
-                self.net.NextName('counter'))
-
-    def setup_limiter(self, global_init_net, global_finish_net):
-        if self.counter:
-            global_init_net.CreateCounter(
-                [], [self.counter], init_count=int(self.num_iter))
-
-    def check_limiter_condition(self, stop_condition_net):
-        if self.counter:
-            return stop_condition_net.CountDown([self.counter], 1)
-        else:
-            return stop_condition_net.ConstantFill(
-                [], 1,
-                shape=[], value=False, dtype=core.DataType.BOOL)
-
-
 def CountUntil(num_iter):
     return ReaderWithLimit(CounterReader(), num_iter)
-
-
-class ReaderWithTimeLimit(ReaderWithLimitBase):
-    """Reader that stops after `duration` seconds.
-
-    If `duration` <= 0 or is None, reverts to an unconstrained reader that
-    exports a boolean blob indicating that the reader has exhausted
-    the data steam.
-    """
-    def __init__(self, reader, duration=0):
-        """Class initializer.
-
-        Args:
-            reader: The underlying reader object doing the actual read.
-            duration: Number of seconds to read. If un-specified, None, or <= 0,
-                the class reverts to a normal reader except that it also
-                produces a data_finished blob as a side effect to indicate
-                whether the input stream is exhausted.
-        """
-        super(ReaderWithTimeLimit, self).__init__(reader)
-
-        self.timer = None
-        self.duration = duration
-        self.duration_ns_blob = None
-
-    def setup_limiter(self, global_init_net, global_finish_net):
-        if self.duration is not None and self.duration > 0:
-            duration_ns = int(self.duration * (10**9))
-
-            self.timer = global_init_net.TimerBegin(
-                [], counter_name='epoch_timer')
-            start_time = global_init_net.TimerGet(self.timer)
-            self.duration_ns_blob = global_init_net.ConstantFill(
-                [start_time], value=duration_ns)
-
-            global_finish_net.TimerEnd([self.timer], [])
-
-    def check_limiter_condition(self, stop_condition_net):
-        if self.duration:
-            time_elapsed = stop_condition_net.TimerGet(self.timer)
-            return stop_condition_net.GE(
-                [time_elapsed, self.duration_ns_blob], str(self.should_stop))
-        else:
-            return stop_condition_net.ConstantFill(
-                [], 1, shape=[], value=False, dtype=core.DataType.BOOL
-            )

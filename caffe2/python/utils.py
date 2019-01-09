@@ -4,41 +4,15 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
-
 from caffe2.proto import caffe2_pb2
 from future.utils import viewitems
 from google.protobuf.message import DecodeError, Message
 from google.protobuf import text_format
-
 import sys
-import copy
 import collections
 import functools
 import numpy as np
 from six import integer_types, binary_type, text_type
-
-
-def OpAlmostEqual(op_a, op_b, ignore_fields=None):
-    '''
-    Two ops are identical except for each field in the `ignore_fields`.
-    '''
-    ignore_fields = ignore_fields or []
-    if not isinstance(ignore_fields, list):
-        ignore_fields = [ignore_fields]
-
-    assert all(isinstance(f, text_type) for f in ignore_fields), (
-        'Expect each field is text type, but got {}'.format(ignore_fields))
-
-    def clean_op(op):
-        op = copy.deepcopy(op)
-        for field in ignore_fields:
-            if op.HasField(field):
-                op.ClearField(field)
-        return op
-
-    op_a = clean_op(op_a)
-    op_b = clean_op(op_b)
-    return op_a == op_b
 
 
 def CaffeBlobToNumpyArray(blob):
@@ -93,7 +67,7 @@ def NumpyArrayToCaffe2Tensor(arr, name=None):
         tensor.double_data.extend(list(arr.flatten().astype(np.float64)))
     elif arr.dtype == np.int or arr.dtype == np.int32:
         tensor.data_type = caffe2_pb2.TensorProto.INT32
-        tensor.int32_data.extend(arr.flatten().astype(np.int).tolist())
+        tensor.int32_data.extend(list(arr.flatten().astype(np.int)))
     elif arr.dtype == np.int16:
         tensor.data_type = caffe2_pb2.TensorProto.INT16
         tensor.int32_data.extend(list(arr.flatten().astype(np.int16)))  # np.int16=>pb.INT16 use int32_data
@@ -143,8 +117,6 @@ def MakeArgument(key, value):
         argument.s = value
     elif isinstance(value, text_type):
         argument.s = value.encode('utf-8')
-    elif isinstance(value, caffe2_pb2.NetDef):
-        argument.n.CopyFrom(value)
     elif isinstance(value, Message):
         argument.s = value.SerializeToString()
     elif iterable and all(type(v) in [float, np.float_] for v in value):
@@ -164,8 +136,6 @@ def MakeArgument(key, value):
             v.encode('utf-8') if isinstance(v, text_type) else v
             for v in value
         )
-    elif iterable and all(isinstance(v, caffe2_pb2.NetDef) for v in value):
-        argument.nets.extend(value)
     elif iterable and all(isinstance(v, Message) for v in value):
         argument.strings.extend(v.SerializeToString() for v in value)
     else:
@@ -300,11 +270,6 @@ class DebugMode(object):
             pdb.post_mortem()
             sys.exit(1)
             raise
-
-
-def raiseIfNotEqual(a, b, msg):
-    if a != b:
-        raise Exception("{}. {} != {}".format(msg, a, b))
 
 
 def debug(f):

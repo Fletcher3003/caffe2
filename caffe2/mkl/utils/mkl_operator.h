@@ -6,8 +6,6 @@
 #include "caffe2/mkl/utils/mkl_memory.h"
 #include "caffe2/proto/caffe2.pb.h"
 
-CAFFE2_DECLARE_bool(caffe2_mkl_memonger_in_use);
-
 namespace caffe2 {
 
 CAFFE_DECLARE_REGISTRY(
@@ -32,8 +30,7 @@ template <typename T>
 class MKLOperator : public OperatorBase {
  public:
   explicit MKLOperator(const OperatorDef& operator_def, Workspace* ws)
-      : OperatorBase(operator_def, ws),
-        context_(operator_def.device_option()) {}
+      : OperatorBase(operator_def, ws) {}
   virtual ~MKLOperator() {}
 
   inline const MKLMemory<T>& Input(int idx) {
@@ -53,28 +50,9 @@ class MKLOperator : public OperatorBase {
     try {
       return RunOnDevice();
     } catch (EnforceNotMet& err) {
-      err.AppendMessage(getErrorMsg());
+      err.AppendMessage(
+          "Error from operator: \n" + ProtoDebugString(debug_def()));
       throw;
-    }
-  }
-
-  // Waits for a previous event. Note that to properly wait and run
-  // asynchronously, WaitEvent, RunAsync and Record should all be executed
-  // on the same CPU thread.
-  void WaitEvent(const Event& ev, int /* unused */) final {
-    context_.WaitEvent(ev);
-  }
-
-  void WaitEvents(const std::vector<const Event*>& events, int /* unused */)
-      final {
-    for (const auto& ev : events) {
-      context_.WaitEvent(*ev);
-    }
-  }
-
-  void RecordEvent(const char* err_msg = nullptr) final {
-    if (event_) {
-      context_.Record(event_.get(), err_msg);
     }
   }
 
@@ -85,15 +63,6 @@ class MKLOperator : public OperatorBase {
   }
 
  protected:
-  std::string getErrorMsg() {
-    if (has_debug_def()) {
-      return "Error from operator: " + ProtoDebugString(debug_def());
-    } else {
-      return "Error from operator: no op def";
-    }
-  }
-
-  MKLContext context_;
   // The primitive used in the operator.
   PrimitiveWrapper<T> primitive_;
   // Size cache for all the input sizes.

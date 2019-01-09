@@ -55,7 +55,6 @@
 
 # Visual Studio Code files
 .vscode
-.vs
 
 # OSX dir files
 .DS_Store
@@ -76,9 +75,6 @@ distribute/*
 cmake_build
 .cmake_build
 gen
-.setuptools-cmake-build
-.pytest_cache
-dist
 
 # Bram
 plsdontbreak
@@ -97,13 +93,3 @@ LOCK
 LOG*
 CURRENT
 MANIFEST-*
-
-# generated version file
-caffe2/version.py
-
-# setup.py intermediates
-.eggs
-caffe2.egg-info
-
-# Atom/Watchman required file
-.watchmanconfig

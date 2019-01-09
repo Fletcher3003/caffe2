@@ -6,7 +6,6 @@ from __future__ import unicode_literals
 import hypothesis.strategies as st
 import numpy as np
 import numpy.testing as npt
-import unittest
 from hypothesis import given
 
 import caffe2.python.hypothesis_test_util as hu
@@ -26,14 +25,9 @@ from caffe2.python.layer_test_util import (
     OpSpec,
 )
 from caffe2.python.layers.layers import (
-    IdList,
     set_request_only,
     is_request_only_scalar,
-    get_key,
 )
-
-import logging
-logger = logging.getLogger(__name__)
 
 
 class TestLayers(LayersTestCase):
@@ -41,7 +35,7 @@ class TestLayers(LayersTestCase):
         input_record_LR = self.new_record(
             schema.Struct(
                 ('label', schema.Scalar((np.float64, (1, )))),
-                ('logit', schema.Scalar((np.float32, (2, )))),
+                ('prediction', schema.Scalar((np.float32, (2, )))),
                 ('weight', schema.Scalar((np.float64, (1, ))))
             )
         )
@@ -113,30 +107,6 @@ class TestLayers(LayersTestCase):
         assert core.BlobReference('loss_blob_in_tuple_1')\
          in self.model.loss.field_blobs()
 
-    def testAddOutputSchema(self):
-        # add the first field
-        self.model.add_output_schema('struct', schema.Struct())
-        expected_output_schema = schema.Struct(('struct', schema.Struct()))
-        self.assertEqual(
-            self.model.output_schema,
-            expected_output_schema,
-        )
-
-        # add the second field
-        self.model.add_output_schema('scalar', schema.Scalar(np.float64))
-        expected_output_schema = schema.Struct(
-            ('struct', schema.Struct()),
-            ('scalar', schema.Scalar(np.float64)),
-        )
-        self.assertEqual(
-            self.model.output_schema,
-            expected_output_schema,
-        )
-
-        # overwrite a field should raise
-        with self.assertRaises(AssertionError):
-            self.model.add_output_schema('scalar', schema.Struct())
-
     def _test_net(self, net, ops_list):
         """
         Helper function to assert the net contains some set of operations and
@@ -184,341 +154,6 @@ class TestLayers(LayersTestCase):
 
         predict_net = self.get_predict_net()
         self.assertNetContainOps(predict_net, [mat_mul_spec])
-
-    def testSparseLookupSumPooling(self):
-        record = schema.NewRecord(self.model.net, schema.Struct(
-            ('sparse', schema.Struct(
-                ('sparse_feature_0', schema.List(
-                    schema.Scalar(np.int64,
-                                  metadata=schema.Metadata(categorical_limit=1000)))),
-            )),
-        ))
-        embedding_dim = 64
-        embedding_after_pooling = self.model.SparseLookup(
-            record.sparse.sparse_feature_0, [embedding_dim], 'Sum')
-        self.model.output_schema = schema.Struct()
-        self.assertEqual(
-            schema.Scalar((np.float32, (embedding_dim, ))),
-            embedding_after_pooling
-        )
-
-        train_init_net, train_net = self.get_training_nets()
-
-        init_ops = self.assertNetContainOps(
-            train_init_net,
-            [
-                OpSpec("UniformFill", None, None),
-                OpSpec("ConstantFill", None, None),
-            ]
-        )
-        sparse_lookup_op_spec = OpSpec(
-            'SparseLengthsSum',
-            [
-                init_ops[0].output[0],
-                record.sparse.sparse_feature_0.items(),
-                record.sparse.sparse_feature_0.lengths(),
-            ],
-            [embedding_after_pooling()]
-        )
-        self.assertNetContainOps(train_net, [sparse_lookup_op_spec])
-
-        predict_net = self.get_predict_net()
-        self.assertNetContainOps(predict_net, [sparse_lookup_op_spec])
-
-    @given(
-        use_hashing=st.booleans(),
-        modulo=st.integers(min_value=100, max_value=200),
-    )
-    def testSparseFeatureHashIdList(self, use_hashing, modulo):
-        record = schema.NewRecord(
-            self.model.net,
-            schema.List(schema.Scalar(
-                np.int64,
-                metadata=schema.Metadata(categorical_limit=60000)
-            ))
-        )
-        output_schema = self.model.SparseFeatureHash(
-            record,
-            modulo=modulo,
-            use_hashing=use_hashing)
-
-        self.model.output_schema = output_schema
-
-        self.assertEqual(len(self.model.layers), 1)
-        self.assertEqual(output_schema._items.metadata.categorical_limit,
-                modulo)
-        train_init_net, train_net = self.get_training_nets()
-
-    @given(
-        use_hashing=st.booleans(),
-        modulo=st.integers(min_value=100, max_value=200),
-    )
-    def testSparseFeatureHashIdScoreList(self, use_hashing, modulo):
-        record = schema.NewRecord(self.model.net,
-                schema.Map(schema.Scalar(np.int64,
-                    metadata=schema.Metadata(
-                        categorical_limit=60000)),
-                    np.float32))
-
-        output_schema = self.model.SparseFeatureHash(
-            record,
-            modulo=modulo,
-            use_hashing=use_hashing)
-
-        self.model.output_schema = output_schema
-
-        self.assertEqual(len(self.model.layers), 1)
-        self.assertEqual(output_schema._items.keys.metadata.categorical_limit,
-                modulo)
-        train_init_net, train_net = self.get_training_nets()
-
-    def testSparseLookupIncorrectPositionWeightedOnIdList(self):
-        '''
-        Currently the implementation of SparseLookup assumed input is id_score_list
-        when use PositionWeighted.
-        '''
-        record = schema.NewRecord(self.model.net, schema.Struct(
-            ('sparse', schema.Struct(
-                ('sparse_feature_0', schema.List(
-                    schema.Scalar(np.int64,
-                                  metadata=schema.Metadata(categorical_limit=1000)))),
-            )),
-        ))
-
-        embedding_dim = 64
-        with self.assertRaises(AssertionError):
-            self.model.SparseLookup(
-                record.sparse.sparse_feature_0, [embedding_dim], 'PositionWeighted')
-
-    def testSparseLookupPositionWeightedOnIdList(self):
-        record = schema.NewRecord(self.model.net, schema.Struct(
-            ('sparse', schema.Struct(
-                ('sparse_feature_0', schema.List(
-                    schema.Scalar(np.int64,
-                                  metadata=schema.Metadata(categorical_limit=1000)))),
-            )),
-        ))
-
-        # convert id_list to id_score_list with PositionWeighted layer
-        sparse_segment = record.sparse.sparse_feature_0
-        pos_w_layer = self.model.PositionWeighted(sparse_segment)
-
-        sparse_segment = schema.Map(
-            keys=get_key(sparse_segment),
-            values=pos_w_layer.position_weights,
-            lengths_blob=sparse_segment.lengths
-        )
-
-        embedding_dim = 64
-        embedding_after_pooling = self.model.SparseLookup(
-            sparse_segment, [embedding_dim], 'PositionWeighted')
-        self.model.output_schema = schema.Struct()
-        self.assertEqual(
-            schema.Scalar((np.float32, (embedding_dim, ))),
-            embedding_after_pooling
-        )
-
-        train_init_net, train_net = self.get_training_nets()
-
-        self.assertNetContainOps(
-            train_init_net,
-            [
-                OpSpec("ConstantFill", None, None),  # position_weights/pos_w
-                OpSpec("UniformFill", None, None),
-                OpSpec("ConstantFill", None, None),
-            ]
-        )
-        self.assertNetContainOps(train_net, [
-            OpSpec("LengthsRangeFill", None, None),
-            OpSpec("Gather", None, None),
-            OpSpec("SparseLengthsWeightedSum", None, None),
-        ])
-
-        predict_net = self.get_predict_net()
-        self.assertNetContainOps(predict_net, [
-            OpSpec("LengthsRangeFill", None, None),
-            OpSpec("Gather", None, None),
-            OpSpec("SparseLengthsWeightedSum", None, None),
-        ])
-
-    def testSparseLookupPositionWeightedOnIdScoreList(self):
-        record = schema.NewRecord(self.model.net, schema.Struct(
-            ('sparse', schema.Struct(
-                ('id_score_list_0', schema.Map(
-                    schema.Scalar(
-                        np.int64,
-                        metadata=schema.Metadata(
-                            categorical_limit=1000
-                        ),
-                    ),
-                    np.float32
-                )),
-            )),
-        ))
-
-        embedding_dim = 64
-        embedding_after_pooling = self.model.SparseLookup(
-            record.sparse.id_score_list_0, [embedding_dim], 'PositionWeighted')
-        self.model.output_schema = schema.Struct()
-        self.assertEqual(
-            schema.Scalar((np.float32, (embedding_dim, ))),
-            embedding_after_pooling
-        )
-
-        train_init_net, train_net = self.get_training_nets()
-
-        init_ops = self.assertNetContainOps(
-            train_init_net,
-            [
-                OpSpec("UniformFill", None, None),
-                OpSpec("ConstantFill", None, None),
-            ]
-        )
-        sparse_lookup_op_spec = OpSpec(
-            'SparseLengthsWeightedSum',
-            [
-                init_ops[0].output[0],
-                record.sparse.id_score_list_0.values(),
-                record.sparse.id_score_list_0.keys(),
-                record.sparse.id_score_list_0.lengths(),
-            ],
-            [embedding_after_pooling()]
-        )
-        self.assertNetContainOps(train_net, [sparse_lookup_op_spec])
-
-        predict_net = self.get_predict_net()
-        self.assertNetContainOps(predict_net, [sparse_lookup_op_spec])
-
-    def testPairwiseDotProductWithAllEmbeddings(self):
-        embedding_dim = 64
-        N = 5
-        record = schema.NewRecord(self.model.net, schema.Struct(
-            ('all_embeddings', schema.Scalar(
-                ((np.float32, (N, embedding_dim)))
-            )),
-        ))
-        current = self.model.PairwiseDotProduct(
-            record, N * N)
-
-        self.assertEqual(
-            schema.Scalar((np.float32, (N * N, ))),
-            current
-        )
-
-        train_init_net, train_net = self.get_training_nets()
-        self.assertNetContainOps(train_init_net, [])
-        self.assertNetContainOps(train_net, [
-            OpSpec("BatchMatMul", None, None),
-            OpSpec("Flatten", None, None),
-        ])
-
-    def testPairwiseDotProductWithXandYEmbeddings(self):
-        embedding_dim = 64
-        record = schema.NewRecord(self.model.net, schema.Struct(
-            ('x_embeddings', schema.Scalar(
-                ((np.float32, (5, embedding_dim)))
-            )),
-            ('y_embeddings', schema.Scalar(
-                ((np.float32, (6, embedding_dim)))
-            )),
-        ))
-        current = self.model.PairwiseDotProduct(
-            record, 5 * 6)
-
-        self.assertEqual(
-            schema.Scalar((np.float32, (5 * 6, ))),
-            current
-        )
-
-        train_init_net, train_net = self.get_training_nets()
-        self.assertNetContainOps(train_init_net, [])
-        self.assertNetContainOps(train_net, [
-            OpSpec("BatchMatMul", None, None),
-            OpSpec("Flatten", None, None),
-        ])
-
-    def testPairwiseDotProductWithXandYEmbeddingsAndGather(self):
-        embedding_dim = 64
-
-        output_idx = [1, 3, 5]
-        output_idx_blob = self.model.add_global_constant(
-            str(self.model.net.NextScopedBlob('pairwise_dot_product_gather')),
-            output_idx,
-            dtype=np.int32,
-        )
-        indices_to_gather = schema.Scalar(
-            (np.int32, len(output_idx)),
-            output_idx_blob,
-        )
-
-        record = schema.NewRecord(self.model.net, schema.Struct(
-            ('x_embeddings', schema.Scalar(
-                ((np.float32, (5, embedding_dim)))
-            )),
-            ('y_embeddings', schema.Scalar(
-                ((np.float32, (6, embedding_dim)))
-            )),
-            ('indices_to_gather', indices_to_gather),
-        ))
-        current = self.model.PairwiseDotProduct(
-            record, len(output_idx))
-
-        # This assert is not necessary,
-        # output size is passed into PairwiseDotProduct
-        self.assertEqual(
-            schema.Scalar((np.float32, (len(output_idx), ))),
-            current
-        )
-
-        train_init_net, train_net = self.get_training_nets()
-        self.assertNetContainOps(train_init_net, [])
-        self.assertNetContainOps(train_net, [
-            OpSpec("BatchMatMul", None, None),
-            OpSpec("Flatten", None, None),
-            OpSpec("BatchGather", None, None),
-        ])
-
-    def testPairwiseDotProductIncorrectInput(self):
-        embedding_dim = 64
-        record = schema.NewRecord(self.model.net, schema.Struct(
-            ('x_embeddings', schema.Scalar(
-                ((np.float32, (5, embedding_dim)))
-            )),
-        ))
-        with self.assertRaises(AssertionError):
-            self.model.PairwiseDotProduct(
-                record, 25)
-
-        record = schema.NewRecord(self.model.net, schema.Struct(
-            ('all_embeddings', schema.List(np.float32))
-        ))
-        with self.assertRaises(AssertionError):
-            self.model.PairwiseDotProduct(
-                record, 25)
-
-    def testConcat(self):
-        embedding_dim = 64
-        input_record = self.new_record(schema.Struct(
-            ('input1', schema.Scalar((np.float32, (embedding_dim, )))),
-            ('input2', schema.Scalar((np.float32, (embedding_dim, )))),
-            ('input3', schema.Scalar((np.float32, (embedding_dim, )))),
-        ))
-
-        output = self.model.Concat(input_record)
-        self.assertEqual(
-            schema.Scalar((np.float32, ((len(input_record.fields) * embedding_dim, )))),
-            output
-        )
-
-        # Note that in Concat layer we assume first dimension is batch.
-        # so input is B * embedding_dim
-        # add_axis=1 make it B * 1 * embedding_dim
-        # concat on axis=1 make it B * N * embedding_dim
-        output = self.model.Concat(input_record, axis=1, add_axis=1)
-        self.assertEqual(
-            schema.Scalar((np.float32, ((len(input_record.fields), embedding_dim)))),
-            output
-        )
 
     def testSamplingTrain(self):
         output_dims = 1000
@@ -616,26 +251,10 @@ class TestLayers(LayersTestCase):
     def testBatchLRLoss(self):
         input_record = self.new_record(schema.Struct(
             ('label', schema.Scalar((np.float64, (1,)))),
-            ('logit', schema.Scalar((np.float32, (2,)))),
+            ('prediction', schema.Scalar((np.float32, (2,)))),
             ('weight', schema.Scalar((np.float64, (1,))))
         ))
         loss = self.model.BatchLRLoss(input_record)
-        self.assertEqual(schema.Scalar((np.float32, tuple())), loss)
-
-    def testMarginRankLoss(self):
-        input_record = self.new_record(schema.Struct(
-            ('pos_prediction', schema.Scalar((np.float32, (1,)))),
-            ('neg_prediction', schema.List(np.float32)),
-        ))
-        pos_items = np.array([0.1, 0.2, 0.3], dtype=np.float32)
-        neg_lengths = np.array([1, 2, 3], dtype=np.int32)
-        neg_items = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6], dtype=np.float32)
-        schema.FeedRecord(
-            input_record,
-            [pos_items, neg_lengths, neg_items]
-        )
-        loss = self.model.MarginRankLoss(input_record)
-        self.run_train_net_forward_only()
         self.assertEqual(schema.Scalar((np.float32, tuple())), loss)
 
     def testBatchMSELoss(self):
@@ -767,11 +386,9 @@ class TestLayers(LayersTestCase):
         schema.FeedRecord(input_record, [X])
         last_n = self.model.LastNWindowCollector(input_record, num_to_collect)
         self.run_train_net_forward_only()
-        output_record = schema.FetchRecord(last_n.last_n)
+        output_record = schema.FetchRecord(last_n)
         start = max(0, 5 - num_to_collect)
         npt.assert_array_equal(X[start:], output_record())
-        num_visited = schema.FetchRecord(last_n.num_visited)
-        npt.assert_array_equal([5], num_visited())
 
     def testUniformSampling(self):
         input_record = self.new_record(schema.Scalar(np.int32))
@@ -793,13 +410,6 @@ class TestLayers(LayersTestCase):
                      dtype=np.float32),
             sampling_prob
         )
-
-    def testUniformSamplingWithIncorrectSampleSize(self):
-        input_record = self.new_record(schema.Scalar(np.int32))
-        num_samples = 200
-        num_elements = 100
-        with self.assertRaises(AssertionError):
-            self.model.UniformSampling(input_record, num_samples, num_elements)
 
     def testGatherRecord(self):
         indices = np.array([1, 3, 4], dtype=np.int32)
@@ -1062,18 +672,6 @@ class TestLayers(LayersTestCase):
         assert len(ops[0].output) == 1
         assert ops[0].output[0] in ops[1].input
 
-    @unittest.skipIf(not workspace.has_gpu_support, "No gpu support.")
-    def testHalfToFloatTypeInference(self):
-        input = self.new_record(schema.Scalar((np.float32, (32,))))
-
-        output = self.model.FloatToHalf(input, 1)
-        assert output.field_type().base == np.float16
-        assert output.field_type().shape == (32, )
-
-        output = self.model.HalfToFloat(output, 1)
-        assert output.field_type().base == np.float32
-        assert output.field_type().shape == (32, )
-
     def testFunctionalLayerHelperAutoInferenceScalar(self):
         loss = self.model.AveragedLoss(self.model.input_feature_schema, 1)
         self.assertEqual(1, len(loss.field_types()))
@@ -1101,11 +699,6 @@ class TestLayers(LayersTestCase):
         self.assertEqual(np.int32, topk.field_types()[1].base)
         self.assertEqual((k,), topk.field_types()[1].shape)
         self.assertEqual(['TopK/values', 'TopK/indices'], topk.field_blobs())
-
-    def testFunctionalLayerSameOperatorOutputNames(self):
-        Con1 = self.model.ConstantFill([], 1, value=1)
-        Con2 = self.model.ConstantFill([], 1, value=2)
-        self.assertNotEqual(str(Con1), str(Con2))
 
     def testFunctionalLayerWithOutputDtypes(self):
         loss = self.model.AveragedLoss(
@@ -1216,32 +809,6 @@ class TestLayers(LayersTestCase):
         workspace.RunNetOnce(predict_net)
 
     @given(
-        num_inputs=st.integers(1, 3),
-        batch_size=st.integers(5, 10)
-    )
-    def testMergeIdListsLayer(self, num_inputs, batch_size):
-        inputs = []
-        for _ in range(num_inputs):
-            lengths = np.random.randint(5, size=batch_size).astype(np.int32)
-            size = lengths.sum()
-            values = np.random.randint(1, 10, size=size).astype(np.int64)
-            inputs.append(lengths)
-            inputs.append(values)
-        input_schema = schema.Tuple(
-            *[schema.List(
-                schema.Scalar(dtype=np.int64, metadata=schema.Metadata(
-                    categorical_limit=20
-                ))) for _ in range(num_inputs)]
-        )
-
-        input_record = schema.NewRecord(self.model.net, input_schema)
-        schema.FeedRecord(input_record, inputs)
-        output_schema = self.model.MergeIdLists(input_record)
-        assert schema.equal_schemas(
-            output_schema, IdList,
-            check_field_names=False)
-
-    @given(
         batch_size=st.integers(min_value=2, max_value=10),
         input_dims=st.integers(min_value=5, max_value=10),
         output_dims=st.integers(min_value=5, max_value=10),
@@ -1262,7 +829,7 @@ class TestLayers(LayersTestCase):
             """
             output = workspace.FetchBlob(rff_output)
             output_ref = scale * np.cos(np.dot(X, np.transpose(W)) + b)
-            npt.assert_allclose(output, output_ref, rtol=1e-3, atol=1e-3)
+            npt.assert_allclose(output, output_ref, rtol=1e-4)
 
         X = np.random.random((batch_size, input_dims)).astype(np.float32)
         scale = np.sqrt(2.0 / output_dims)
@@ -1355,7 +922,7 @@ class TestLayers(LayersTestCase):
             output_ref = np.multiply(x_pow, h_rand_features)
 
             # Comparing net output and computed output
-            npt.assert_allclose(net_output, output_ref, rtol=1e-3, atol=1e-3)
+            npt.assert_allclose(net_output, output_ref, rtol=1e-4)
 
         X = np.random.normal(size=(batch_size, input_dims)).astype(np.float32)
         input_record = self.new_record(schema.Scalar((np.float32, (input_dims,))))
@@ -1481,7 +1048,7 @@ class TestLayers(LayersTestCase):
             output_ref = np.multiply(np.multiply(x_pow, h_rand_features), x_learn)
 
             # Comparing net output and computed output
-            npt.assert_allclose(net_output, output_ref, rtol=1e-3, atol=1e-3)
+            npt.assert_allclose(net_output, output_ref, rtol=1e-4)
 
         X_full = np.random.normal(size=(batch_size, input_dims)).astype(np.float32)
         if use_struct_input:
@@ -1684,114 +1251,3 @@ class TestLayers(LayersTestCase):
         # Eval net assertions
         eval_net = self.get_eval_net()
         self.assertNetContainOps(eval_net, [conv_spec])
-
-    @given(
-        num=st.integers(min_value=10, max_value=100),
-        feed_weight=st.booleans(),
-        **hu.gcs
-    )
-    def testAdaptiveWeight(self, num, feed_weight, gc, dc):
-        input_record = self.new_record(schema.RawTuple(num))
-        data = np.random.random(num)
-        schema.FeedRecord(
-            input_record,
-            [np.array(x).astype(np.float32) for x in data]
-        )
-        weights = np.random.random(num) if feed_weight else None
-        result = self.model.AdaptiveWeight(input_record, weights=weights)
-        train_init_net, train_net = self.get_training_nets(True)
-        workspace.RunNetOnce(train_init_net)
-        workspace.RunNetOnce(train_net)
-        result = workspace.FetchBlob(result())
-        if not feed_weight:
-            weights = 1. / num
-        expected = np.sum(weights * data + np.log(1. / 2. / weights))
-        npt.assert_allclose(expected, result, atol=1e-4, rtol=1e-4)
-
-    @given(num=st.integers(min_value=10, max_value=100), **hu.gcs)
-    def testConstantWeight(self, num, gc, dc):
-        input_record = self.new_record(schema.RawTuple(num))
-        data = np.random.random(num)
-        schema.FeedRecord(
-            input_record, [np.array(x).astype(np.float32) for x in data]
-        )
-        weights = np.random.random(num)
-        result = self.model.ConstantWeight(input_record, weights=weights)
-        train_init_net, train_net = self.get_training_nets(True)
-        workspace.RunNetOnce(train_init_net)
-        workspace.RunNetOnce(train_net)
-        result = workspace.FetchBlob(result())
-        expected = np.sum(weights * data)
-        npt.assert_allclose(expected, result, atol=1e-4, rtol=1e-4)
-
-    @given(**hu.gcs)
-    def testHomotopyWeight(self, gc, dc):
-        input_record = self.new_record(schema.RawTuple(2))
-        data = np.random.random(2)
-        schema.FeedRecord(
-            input_record, [np.array(x).astype(np.float32) for x in data]
-        )
-        # ensure: quad_life > 2 * half_life
-        half_life = int(np.random.random() * 1e2 + 1)
-        quad_life = int(np.random.random() * 1e3 + 2 * half_life + 1)
-        result = self.model.HomotopyWeight(
-            input_record,
-            min_weight=0.,
-            max_weight=1.,
-            half_life=half_life,
-            quad_life=quad_life,
-        )
-        train_init_net, train_net = self.get_training_nets(True)
-        workspace.RunNetOnce(train_init_net)
-        workspace.CreateNet(train_net)
-        workspace.RunNet(train_net.Name(), num_iter=half_life)
-        half_life_result = workspace.FetchBlob(result())
-        workspace.RunNet(train_net.Name(), num_iter=quad_life - half_life)
-        quad_life_result = workspace.FetchBlob(result())
-        expected_half_life_result = 0.5 * data[0] + 0.5 * data[1]
-        expected_quad_life_result = 0.25 * data[0] + 0.75 * data[1]
-        npt.assert_allclose(
-            expected_half_life_result, half_life_result, atol=1e-2, rtol=1e-2
-        )
-        npt.assert_allclose(
-            expected_quad_life_result, quad_life_result, atol=1e-2, rtol=1e-2
-        )
-
-    def _testLabelSmooth(self, categories, binary_prob_label, bsz):
-        label = self.new_record(schema.Scalar((np.float32, (1, ))))
-        label_np = np.random.randint(categories, size=bsz).astype(np.float32)
-        schema.FeedRecord(label, [label_np])
-        smooth_matrix_shape = (
-            2 if binary_prob_label else (categories, categories)
-        )
-        smooth_matrix = np.random.random(smooth_matrix_shape)
-        smoothed_label = self.model.LabelSmooth(label, smooth_matrix)
-        train_init_net, train_net = self.get_training_nets(True)
-        workspace.RunNetOnce(train_init_net)
-        workspace.RunNetOnce(train_net)
-        smoothed_label_np = workspace.FetchBlob(smoothed_label())
-        if binary_prob_label:
-            expected = np.array(
-                [
-                    smooth_matrix[0] if x == 0.0 else smooth_matrix[1]
-                    for x in label_np
-                ]
-            )
-        else:
-            expected = np.array([smooth_matrix[int(x)] for x in label_np])
-        npt.assert_allclose(expected, smoothed_label_np, atol=1e-4, rtol=1e-4)
-
-    @given(
-        categories=st.integers(min_value=2, max_value=10),
-        bsz=st.integers(min_value=10, max_value=100),
-        **hu.gcs
-    )
-    def testLabelSmoothForCategoricalLabel(self, categories, bsz, gc, dc):
-        self._testLabelSmooth(categories, False, bsz)
-
-    @given(
-        bsz=st.integers(min_value=10, max_value=100),
-        **hu.gcs
-    )
-    def testLabelSmoothForBinaryProbLabel(self, bsz, gc, dc):
-        self._testLabelSmooth(2, True, bsz)

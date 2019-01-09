@@ -25,7 +25,7 @@ class TokenizedString {
   const std::vector<Token>& tokens() const {
     return tokens_;
   }
-  int lastDelim() const {
+  const int lastDelim() const {
     return lastDelim_;
   }
   friend class Tokenizer;

@@ -4,10 +4,10 @@
 #include <atomic>
 #include <climits>
 #include <cstddef>
-#include <thread> // NOLINT
+#include <thread>  // NOLINT
 #include <typeinfo>
-#include <unordered_map>
 #include <vector>
+#include <unordered_map>
 
 #include "caffe2/core/blob.h"
 #include "caffe2/core/common.h"
@@ -29,42 +29,19 @@ typedef std::function<std::unique_ptr<NetObserver>(NetBase*)>
 
 class OperatorBase;
 class Workspace;
-
 // Net is a thin struct that owns all the operators together with the operator
 // contexts.
-class NetBase : public Observable<NetBase> {
+class NetBase {
  public:
   NetBase(const std::shared_ptr<const NetDef>& net_def, Workspace* ws);
   virtual ~NetBase() noexcept {}
+  virtual bool Run() = 0;
 
-  virtual bool SupportsAsync() = 0;
-  inline const vector<const Event*>& events() const {
-    return events_;
-  }
-
-  virtual void Wait() {
-    // by default just wait till all events are finished
-    for (const auto& event : events_) {
-      event->Finish();
-    }
-  }
-
-  virtual bool Run() {
-    if (!RunAsync()) {
-      LOG(ERROR) << "Failed to execute async run";
-      return false;
-    }
-    Wait();
-    for (const Event* event : events_) {
-      if (event->Query() != EventStatus::EVENT_SUCCESS) {
-        CAFFE_THROW(event->ErrorMessage());
-      }
-    }
-    return true;
-  }
-
-  virtual bool RunAsync();
-
+  // RunAsync runs the net on the current stream, but potentially does
+  // not synchronize with respect to the host, and thus may require
+  // external synchronization (with respect to the current stream)
+  // after execution.
+  virtual bool RunAsync() { return Run(); }
   /**
    * Benchmarks a network.
    *
@@ -97,29 +74,28 @@ class NetBase : public Observable<NetBase> {
    */
   virtual vector<OperatorBase*> GetOperators() const = 0;
 
+  void SetObserver(std::unique_ptr<NetObserver> observer) {
+    observer_ = std::move(observer);
+  }
+
+  void RemoveObserver() {
+    observer_ = nullptr;
+  }
+
+  NetObserver* GetObserver() {
+    return observer_.get();
+  }
+
   const string& Name() const {
     return name_;
   }
 
-  inline const NetDef& debug_def() const {
-    CAFFE_ENFORCE(has_debug_def(), "net_def was null!");
-    return *net_def_;
-  }
-
-  inline bool has_debug_def() const {
-    return net_def_ != nullptr;
-  }
-
  protected:
-  virtual bool DoRunAsync() {
-    CAFFE_THROW("Not implemented");
-  };
-
   vector<string> external_input_;
   vector<string> external_output_;
   string name_;
-  vector<const Event*> events_;
-  std::shared_ptr<const NetDef> net_def_;
+  std::unique_ptr<NetObserver> observer_;
+
   DISABLE_COPY_AND_ASSIGN(NetBase);
 };
 
@@ -145,8 +121,107 @@ unique_ptr<NetBase> CreateNet(
     const std::shared_ptr<const NetDef>& net_def,
     Workspace* ws);
 
-void AddGlobalNetObserverCreator(NetObserverCreator creator);
+// This is the very basic structure you need to run a network - all it
+// does is simply to run everything in sequence. If you want more fancy control
+// such as a DAG-like execution, check out other better net implementations.
+class SimpleNet : public NetBase {
+ public:
+  SimpleNet(const std::shared_ptr<const NetDef>& net_def, Workspace* ws);
+  bool Run() override;
+  bool RunAsync() override;
+  vector<float> TEST_Benchmark(
+      const int warmup_runs,
+      const int main_runs,
+      const bool run_individual) override;
 
-} // namespace caffe2
+  /*
+   * This returns a list of pointers to objects stored in unique_ptrs.
+   * Used by Observers.
+   *
+   * Think carefully before using.
+   */
+  vector<OperatorBase*> GetOperators() const override {
+    vector<OperatorBase*> op_list;
+    for (auto& op : operators_) {
+      op_list.push_back(op.get());
+    }
+    return op_list;
+  }
 
-#endif // CAFFE2_CORE_NET_H_
+ protected:
+  vector<unique_ptr<OperatorBase> > operators_;
+
+  DISABLE_COPY_AND_ASSIGN(SimpleNet);
+};
+
+namespace internal {
+struct OperatorNode {
+  unique_ptr<OperatorBase> operator_;
+  vector<int> children_;
+  vector<int> parents_;
+  std::atomic<int> runtime_parent_count_;
+  bool is_chain_start_ = false;
+};
+
+struct OpGraphNode {
+  vector<int> children_;
+  vector<int> parents_;
+  int visited_inputs = 0;
+  int num_orig_parents;
+};
+}
+
+class DAGNetBase : public NetBase {
+ public:
+  using ExecutionChains = std::unordered_map<int, std::vector<int>>;
+  DAGNetBase(const std::shared_ptr<const NetDef>& net_def, Workspace* ws);
+  ~DAGNetBase() override;
+  bool Run() override;
+  // WorkerFunction() is a function wrapper to allow us to run worker threads.
+  // It checks out one ready-to-run operator from the job queue, runs it,
+  // notifies all its children, and for any children that is ready, enqueues
+  // it to the job queue.
+  void WorkerFunction();
+  vector<float> TEST_Benchmark(
+      const int warmup_runs,
+      const int main_runs,
+      const bool run_individual) override;
+
+  const ExecutionChains& TEST_execution_chains() const {
+    return execution_chains_;
+  }
+
+  vector<OperatorBase*> GetOperators() const override {
+    vector<OperatorBase*> op_list;
+    for (auto& op_node : operator_nodes_) {
+      op_list.push_back(op_node.operator_.get());
+    }
+    return op_list;
+  }
+
+ protected:
+  virtual bool RunAt(const std::vector<int>& chain) = 0;
+
+  vector<internal::OperatorNode> operator_nodes_;
+  ExecutionChains execution_chains_;
+  vector<int> initial_frontier_;
+  std::unique_ptr<SimpleQueue<int>> job_queue_;
+  std::vector<std::thread> workers_;
+  int num_workers_;
+  int num_workers_first_iteration_;
+  int remaining_ops_;
+
+  bool success_;
+  int iter_;
+  std::mutex remaining_ops_mutex_;
+  std::condition_variable cv_;
+  std::mutex run_in_progress_;
+
+  DISABLE_COPY_AND_ASSIGN(DAGNetBase);
+};
+
+void SetGlobalNetObserverCreator(NetObserverCreator creator);
+
+}  // namespace caffe2
+
+#endif  // CAFFE2_CORE_NET_H_

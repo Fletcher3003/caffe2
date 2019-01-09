@@ -1,10 +1,9 @@
 #ifndef CAFFE2_UTILS_PROTO_UTILS_H_
 #define CAFFE2_UTILS_PROTO_UTILS_H_
 
-#ifdef CAFFE2_USE_LITE_PROTO
-#include <google/protobuf/message_lite.h>
-#else // CAFFE2_USE_LITE_PROTO
-#include <google/protobuf/message.h>
+#include "google/protobuf/message_lite.h"
+#ifndef CAFFE2_USE_LITE_PROTO
+#include "google/protobuf/message.h"
 #endif  // !CAFFE2_USE_LITE_PROTO
 
 #include "caffe2/core/logging.h"
@@ -15,10 +14,6 @@ namespace caffe2 {
 using std::string;
 using ::google::protobuf::MessageLite;
 
-// A wrapper function to shut down protobuf library (this is needed in ASAN
-// testing and valgrind cases to avoid protobuf appearing to "leak" memory).
-void ShutdownProtobufLibrary();
-
 // A wrapper function to return device name string for use in blob serialization
 // / deserialization. This should have one to one correspondence with
 // caffe2/proto/caffe2.proto: enum DeviceType.
@@ -27,9 +22,6 @@ void ShutdownProtobufLibrary();
 // protobuf-full, and some platforms (like mobile) may want to use
 // protobuf-lite instead.
 std::string DeviceTypeName(const int32_t& d);
-
-// Returns if the two DeviceOptions are pointing to the same device.
-bool IsSameDevice(const DeviceOption& lhs, const DeviceOption& rhs);
 
 // Common interfaces that reads file contents into a string.
 bool ReadStringFromFile(const char* filename, string* str);
@@ -49,17 +41,9 @@ inline void WriteProtoToBinaryFile(const MessageLite& proto,
 
 #ifdef CAFFE2_USE_LITE_PROTO
 
-namespace TextFormat {
-inline bool ParseFromString(const string& spec, MessageLite* proto) {
-  LOG(FATAL) << "If you are running lite version, you should not be "
-             << "calling any text-format protobuffers.";
+inline string ProtoDebugString(const MessageLite& proto) {
+  return proto.SerializeAsString();
 }
-} // namespace TextFormat
-
-
-string ProtoDebugString(const MessageLite& proto);
-
-bool ParseProtoFromLargeString(const string& str, MessageLite* proto);
 
 // Text format MessageLite wrappers: these functions do nothing but just
 // allowing things to compile. It will produce a runtime error if you are using
@@ -99,13 +83,9 @@ inline bool ReadProtoFromFile(const string& filename, MessageLite* proto) {
 
 using ::google::protobuf::Message;
 
-namespace TextFormat {
-bool ParseFromString(const string& spec, Message* proto);
-} // namespace TextFormat
-
-string ProtoDebugString(const Message& proto);
-
-bool ParseProtoFromLargeString(const string& str, Message* proto);
+inline string ProtoDebugString(const Message& proto) {
+  return proto.ShortDebugString();
+}
 
 bool ReadProtoFromTextFile(const char* filename, Message* proto);
 inline bool ReadProtoFromTextFile(const string filename, Message* proto) {
@@ -183,9 +163,6 @@ inline OperatorDef CreateOperatorDef(
       device_option,
       engine);
 }
-
-bool HasOutput(const OperatorDef& op, const std::string& output);
-bool HasInput(const OperatorDef& op, const std::string& input);
 
 /**
  * @brief A helper class to index into arguments.
@@ -297,24 +274,6 @@ inline void AddArgument(const string& name, const T& value, OperatorDef* def) {
   GetMutableArgument(name, true, def)->CopyFrom(MakeArgument(name, value));
 }
 
-bool inline operator==(const DeviceOption& dl, const DeviceOption& dr) {
-  return IsSameDevice(dl, dr);
-}
+}  // namespace caffe2
 
-
-} // namespace caffe2
-
-namespace std {
-template <>
-struct hash<caffe2::DeviceOption> {
-  typedef caffe2::DeviceOption argument_type;
-  typedef std::size_t result_type;
-  result_type operator()(argument_type const& device_option) const {
-    std::string serialized;
-    CAFFE_ENFORCE(device_option.SerializeToString(&serialized));
-    return std::hash<std::string>{}(serialized);
-  }
-};
-} // namespace std
-
-#endif // CAFFE2_UTILS_PROTO_UTILS_H_
+#endif  // CAFFE2_UTILS_PROTO_UTILS_H_

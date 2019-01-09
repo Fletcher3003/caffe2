@@ -50,8 +50,7 @@ Softplus takes one input data (Tensor<T>) and produces one output data
 the tensor elementwise.
 )DOC")
     .Input(0, "X", "1D input tensor")
-    .Output(0, "Y", "1D input tensor")
-    .InheritOnnxSchema("Softplus");
+    .Output(0, "Y", "1D input tensor");
 
 // Input: Y, dY, output: dX
 OPERATOR_SCHEMA(SoftplusGradient)

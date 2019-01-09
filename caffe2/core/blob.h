@@ -24,8 +24,6 @@ namespace caffe2 {
  */
 class Blob {
  public:
-  typedef void (*DestroyCall)(void*);
-
   /**
    * Initializes an empty Blob.
    */
@@ -73,12 +71,9 @@ class Blob {
    */
   template <class T>
   const T& Get() const {
-    CAFFE_ENFORCE(
-        IsType<T>(),
+    CAFFE_ENFORCE(IsType<T>(),
         "wrong type for the Blob instance. Blob contains ",
-        meta_.name(),
-        " while caller expects ",
-        TypeMeta::TypeName<T>());
+        meta_.name(), " while caller expects ", TypeMeta::Name<T>());
     return *static_cast<const T*>(pointer_);
   }
 
@@ -104,7 +99,7 @@ class Blob {
       return static_cast<T*>(pointer_);
     } else {
       if (is_new_object) *is_new_object = true;
-      VLOG(1) << "Create new mutable object " << TypeMeta::TypeName<T>();
+      VLOG(1) << "Create new mutable object " << TypeMeta::Name<T>();
       return Reset<T>(new T());
     }
   }
@@ -126,27 +121,6 @@ class Blob {
     pointer_ = static_cast<void*>(allocated);
     destroy_ = &Destroy<T>;
     return allocated;
-  }
-
-  inline void*
-  Reset(void* allocated, const TypeMeta& meta, const DestroyCall& destroy) {
-    if (pointer_ && destroy_) {
-      destroy_(pointer_);
-    }
-    meta_ = meta;
-    pointer_ = static_cast<void*>(allocated);
-    destroy_ = destroy;
-    return allocated;
-  }
-
-  /**
-   * Releases the ownership, if any, this Blob has on the underlying pointer.
-   * The user is then responsible for freeing the data if needed
-   */
-  inline DestroyCall Release() {
-    DestroyCall d = destroy_;
-    destroy_ = nullptr;
-    return d;
   }
 
   /**
@@ -238,6 +212,7 @@ class Blob {
   static void Destroy(void* pointer) {
     delete static_cast<T*>(pointer);
   }
+  typedef void (*DestroyCall)(void *);
   TypeMeta meta_;
   void* pointer_ = nullptr;
   DestroyCall destroy_ = nullptr;

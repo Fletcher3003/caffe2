@@ -115,6 +115,7 @@ class RecurrentNetworkTest(hu.HypothesisTestCase):
             links={output_t_prev: output_t},
             scope="test_rnn_sum_mull",
         )
+
         workspace.blobs[input_blob] = input
         workspace.blobs[initial_input_blob] = initial_input
 
@@ -356,7 +357,8 @@ class RecurrentNetworkTest(hu.HypothesisTestCase):
             backward_link_internal=[],
             backward_link_external=[],
             backward_link_offset=[],
-            step_net=step_model.net.Proto(),
+            step_net=str(step_model.net.Proto()),
+            backward_step_net='',
             timestep='timestep' if timestep is None else str(timestep),
             outputs_with_grads=[],
         )

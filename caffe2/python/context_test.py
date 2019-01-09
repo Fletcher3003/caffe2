@@ -33,7 +33,3 @@ class TestContext(test_util.TestCase):
             t.join()
         for e in self._exceptions:
             raise e
-
-    @MyContext()
-    def testDecorator(self):
-        self.assertIsNotNone(MyContext.current())

@@ -1,7 +1,6 @@
 #include "caffe2/core/context.h"
 #include "caffe2/core/operator.h"
 #include "caffe2/core/tensor.h"
-#include "caffe2/core/types.h"
 #include "caffe2/operators/text_file_reader_utils.h"
 #include "caffe2/utils/string_utils.h"
 
@@ -169,7 +168,7 @@ OPERATOR_SCHEMA(CreateTextFileReader)
     .NumOutputs(1)
     .SetDoc("Create a text file reader. Fields are delimited by <TAB>.")
     .Arg("filename", "Path to the file.")
-    .Arg("num_passes", "Number of passes over the file.")
+    .Arg("num_pases", "Number of passes over the file.")
     .Arg(
         "field_types",
         "List with type of each field. Type enum is found at core.DataType.")
